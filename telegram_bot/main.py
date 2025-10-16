@@ -26,6 +26,7 @@ from session import ClaudeCodeSession, SessionManager
 from tasks import TaskManager
 from claude_interactive import ClaudeSessionPool
 from orchestrator import invoke_orchestrator
+from formatter import format_telegram_response
 
 # Check if whisper is available
 try:
@@ -453,13 +454,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session_manager.add_message(user_id, "user", message_text)
     session_manager.add_message(user_id, "assistant", response)
 
-    # Send response to user
-    if len(response) <= 4096:
-        await update.message.reply_text(response)
-    else:
-        chunks = [response[i:i+4096] for i in range(0, len(response), 4096)]
-        for chunk in chunks:
-            await update.message.reply_text(chunk)
+    # Format and send response to user
+    formatted_chunks = format_telegram_response(
+        response,
+        workspace_path=session_manager.get_workspace(user_id)
+    )
+
+    for chunk in formatted_chunks:
+        await update.message.reply_text(chunk, parse_mode="HTML")
 
 
 def transcribe_audio(file_path: str) -> Optional[str]:
@@ -542,13 +544,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session_manager.add_message(user_id, "user", transcription)
         session_manager.add_message(user_id, "assistant", response)
 
-        # Send response to user (without showing transcription)
-        if len(response) <= 4096:
-            await update.message.reply_text(response)
-        else:
-            chunks = [response[i:i+4096] for i in range(0, len(response), 4096)]
-            for chunk in chunks:
-                await update.message.reply_text(chunk)
+        # Format and send response to user (without showing transcription)
+        formatted_chunks = format_telegram_response(
+            response,
+            workspace_path=session_manager.get_workspace(user_id)
+        )
+
+        for chunk in formatted_chunks:
+            await update.message.reply_text(chunk, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Voice message handling error: {e}")
