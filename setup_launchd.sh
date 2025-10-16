@@ -63,14 +63,14 @@ if launchctl list | grep -q "com.agentlab.telegrambot"; then
     # Show recent logs
     echo ""
     echo "📝 Recent logs:"
-    tail -n 20 logs/bot_stdout.log 2>/dev/null || echo "   (No logs yet)"
+    tail -n 20 logs/bot.log 2>/dev/null || echo "   (No logs yet)"
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✅ Setup complete!"
     echo ""
     echo "📊 Monitor logs:"
-    echo "   tail -f logs/bot_stdout.log"
+    echo "   tail -f logs/bot.log"
     echo ""
     echo "🛑 Stop service:"
     echo "   launchctl unload ~/Library/LaunchAgents/com.agentlab.telegrambot.plist"

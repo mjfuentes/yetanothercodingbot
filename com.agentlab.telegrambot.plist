@@ -32,13 +32,12 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
 
-    <!-- Standard output log -->
+    <!-- Combine stdout and stderr to one log file -->
     <key>StandardOutPath</key>
-    <string>/Users/matifuentes/Workspace/agentlab/logs/bot_stdout.log</string>
+    <string>/Users/matifuentes/Workspace/agentlab/logs/bot.log</string>
 
-    <!-- Standard error log -->
     <key>StandardErrorPath</key>
-    <string>/Users/matifuentes/Workspace/agentlab/logs/bot_stderr.log</string>
+    <string>/Users/matifuentes/Workspace/agentlab/logs/bot.log</string>
 
     <!-- Environment variables (load from .env manually or set here) -->
     <key>EnvironmentVariables</key>
