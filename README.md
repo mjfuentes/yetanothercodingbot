@@ -11,13 +11,14 @@ Control Claude Code from your phone via Telegram bot.
 - 📊 Cost tracking and limits
 - 🔒 User whitelist security
 
-## Current Status: Phase 2 Complete
+## Current Status: Phase 5 Complete
 
 ✅ Basic Telegram bot
 ✅ Claude Code CLI integration
 ✅ Session management with conversation history
+✅ Voice message support with Whisper transcription
 ⏳ Task orchestration (Phase 3-4)
-⏳ Voice & rich formatting (Phase 5-6)
+⏳ Rich formatting (Phase 6)
 ⏳ Production hardening (Phase 7)
 ⏳ Research workflow (Phase 8)
 
@@ -167,7 +168,7 @@ See [TELEGRAM_BOT_PLAN.md](TELEGRAM_BOT_PLAN.md) for detailed breakdown.
 - [x] **Phase 2**: Persistent sessions (Week 1)
 - [ ] **Phase 3**: Orchestrator agent (Week 2)
 - [ ] **Phase 4**: Worker agents (Week 2-3)
-- [ ] **Phase 5**: Voice support (Week 3)
+- [x] **Phase 5**: Voice support with Whisper (Week 1)
 - [ ] **Phase 6**: Rich UX (Week 3-4)
 - [ ] **Phase 7**: Production hardening (Week 4)
 - [ ] **Phase 8**: Research workflow (Week 5)

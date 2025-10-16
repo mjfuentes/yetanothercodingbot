@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 Telegram Bot for Claude Code Orchestrator
-Phase 2: Persistent sessions with conversation history
+Phase 5: Voice message support with Whisper transcription
 """
 
 import asyncio
 import logging
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
@@ -21,6 +23,14 @@ from telegram.ext import (
 )
 
 from session import ClaudeCodeSession, SessionManager
+
+# Check if whisper is available
+try:
+    import whisper
+    WHISPER_AVAILABLE = True
+except ImportError:
+    WHISPER_AVAILABLE = False
+    logging.warning("Whisper not installed. Voice transcription will be limited.")
 
 # Load environment variables
 load_dotenv()
@@ -189,14 +199,79 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(chunk)
 
 
+def transcribe_audio(file_path: str) -> Optional[str]:
+    """Transcribe audio file using Whisper (sync function)"""
+    if not WHISPER_AVAILABLE:
+        return None
+
+    try:
+        # Load model (tiny for speed, can upgrade to base/small/medium)
+        model = whisper.load_model("tiny")
+
+        # Transcribe
+        result = model.transcribe(file_path)
+        return result["text"].strip()
+    except Exception as e:
+        logger.error(f"Whisper transcription failed: {e}")
+        return None
+
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice messages (Phase 5)"""
+    """Handle voice messages with Whisper transcription"""
     if not await check_authorization(update):
         return
 
-    await update.message.reply_text(
-        "🎤 Voice message support coming in Phase 5!"
-    )
+    user_id = update.effective_user.id
+    voice_message = update.message.voice
+
+    logger.info(f"User {user_id} sent voice message (duration: {voice_message.duration}s)")
+
+    # Show typing indicator only
+    await update.message.chat.send_action("typing")
+
+    try:
+        # Download voice file
+        voice_file = await context.bot.get_file(voice_message.file_id)
+
+        # Create temp file
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        # Download to temp file
+        await voice_file.download_to_drive(tmp_path)
+        logger.info(f"Downloaded voice file to {tmp_path}")
+
+        # Transcribe (run in thread to avoid blocking)
+        loop = asyncio.get_event_loop()
+        transcription = await loop.run_in_executor(None, transcribe_audio, tmp_path)
+
+        # Clean up temp file
+        Path(tmp_path).unlink(missing_ok=True)
+
+        if not transcription:
+            await update.message.reply_text(
+                "❌ Transcription failed. Please try again or send text."
+            )
+            return
+
+        logger.info(f"User {user_id} (voice): {transcription}")
+
+        # Process transcription with Claude
+        response = await claude_client.send_message(user_id, transcription)
+
+        # Send response (without showing transcription)
+        if len(response) <= 4096:
+            await update.message.reply_text(response)
+        else:
+            chunks = [response[i:i+4096] for i in range(0, len(response), 4096)]
+            for chunk in chunks:
+                await update.message.reply_text(chunk)
+
+    except Exception as e:
+        logger.error(f"Voice message handling error: {e}")
+        await update.message.reply_text(
+            "❌ Error processing voice message. Please try again."
+        )
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
