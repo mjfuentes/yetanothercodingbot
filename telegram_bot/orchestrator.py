@@ -154,7 +154,7 @@ User query: {user_query}"""
         # The orchestrator agent will automatically be available from .claude/agents/
         cmd = [
             "claude", "chat",
-            "--model", "sonnet",  # Better understanding than Haiku
+            "--model", "haiku",  # Fast responses for chat/routing (background tasks use Sonnet)
             "--permission-mode", "bypassPermissions"  # Auto-approve write operations
         ]
 
