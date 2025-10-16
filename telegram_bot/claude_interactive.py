@@ -34,8 +34,7 @@ class ClaudeInteractiveSession:
             cmd = [
                 "claude",
                 "chat",
-                "--model", self.model,
-                "--no-stream"  # Get complete responses
+                "--model", self.model
             ]
 
             logger.info(f"Starting Claude interactive session for task {task_id}")

@@ -57,10 +57,12 @@ For code tasks, use the Task tool to spawn code_worker:
 Use the Task tool with:
 - subagent_type: "code_worker"
 - description: "Detailed task description"
-- prompt: "Full context + task + repository path"
+- prompt: "Full context + task + workspace info"
 ```
 
 The code_worker agent has access to: Read, Write, Edit, Glob, Grep, Bash.
+
+**IMPORTANT**: You can access ANY repository in `available_repositories`. Use Glob, Grep, Read tools to explore repos outside your current working directory. Provide absolute paths when needed.
 
 ## Response Guidelines
 

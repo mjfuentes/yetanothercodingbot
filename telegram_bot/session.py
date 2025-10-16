@@ -95,6 +95,10 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error saving sessions: {e}")
 
+    def get_session(self, user_id: int) -> Optional[Session]:
+        """Get existing session without creating one"""
+        return self.sessions.get(user_id)
+
     def get_or_create_session(self, user_id: int) -> Session:
         """Get existing session or create new one"""
         now = datetime.now().isoformat()

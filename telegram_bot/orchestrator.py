@@ -73,10 +73,17 @@ async def invoke_orchestrator(
 
 Handle this user query. You can respond directly, or spawn a code_worker agent for code modifications.
 
+IMPORTANT CAPABILITIES:
+- You have Glob, Grep, and Read tools that work with ABSOLUTE PATHS
+- You can access ANY repository in available_repositories by using absolute paths
+- Example: To list files in /Users/matifuentes/Workspace/groovetherapy, use: Glob with pattern="*" and path="/Users/matifuentes/Workspace/groovetherapy"
+- Don't say you can't access repos - just use the tools with absolute paths!
+
 Remember:
 - input_method="{input_method}" ({'be permissive with voice errors' if input_method == 'voice' else 'exact text input'})
 - When user references "you"/"your code"/"the bot": {bot_repository}
 - Current workspace: {current_workspace or workspace_path}
+- USE CONVERSATION CONTEXT: If user just asked about a specific repo, assume subsequent actions apply to that repo
 - Compose user-facing response (concise, mobile-friendly)
 
 User query: {user_query}"""
@@ -89,18 +96,21 @@ User query: {user_query}"""
         cmd = [
             "claude", "chat",
             "--model", "sonnet",
-            "--no-stream"
+            "--permission-mode", "bypassPermissions"  # Auto-approve write operations
         ]
 
         logger.debug(f"Command: {' '.join(cmd)}")
         logger.debug(f"Working directory: {bot_repository}")
 
+        # Run from workspace root to access all repos
+        # Agent config from bot_repository/.claude/agents won't be available,
+        # so we need to pass agent instructions inline via prompt
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=bot_repository  # Run from bot's directory where .claude/agents/ is
+            cwd=workspace_path  # Run from workspace root to access all projects
         )
 
         try:
