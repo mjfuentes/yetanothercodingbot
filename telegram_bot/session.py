@@ -31,6 +31,7 @@ class Session:
     created_at: str
     last_activity: str
     history: List[Message]
+    current_workspace: Optional[str] = None  # Current working repository/workspace
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -43,7 +44,8 @@ class Session:
             user_id=data['user_id'],
             created_at=data['created_at'],
             last_activity=data['last_activity'],
-            history=history
+            history=history,
+            current_workspace=data.get('current_workspace')
         )
 
 
@@ -183,7 +185,8 @@ class SessionManager:
                 "exists": False,
                 "message_count": 0,
                 "created_at": None,
-                "last_activity": None
+                "last_activity": None,
+                "current_workspace": None
             }
 
         session = self.sessions[user_id]
@@ -193,8 +196,21 @@ class SessionManager:
             "created_at": session.created_at,
             "last_activity": session.last_activity,
             "user_messages": sum(1 for msg in session.history if msg.role == 'user'),
-            "assistant_messages": sum(1 for msg in session.history if msg.role == 'assistant')
+            "assistant_messages": sum(1 for msg in session.history if msg.role == 'assistant'),
+            "current_workspace": session.current_workspace
         }
+
+    def set_workspace(self, user_id: int, workspace: str):
+        """Set current workspace for user session"""
+        session = self.get_or_create_session(user_id)
+        session.current_workspace = workspace
+        self._save_sessions()
+        logger.info(f"Set workspace for user {user_id}: {workspace}")
+
+    def get_workspace(self, user_id: int) -> Optional[str]:
+        """Get current workspace for user session"""
+        session = self.get_or_create_session(user_id)
+        return session.current_workspace
 
 
 class ClaudeCodeSession:

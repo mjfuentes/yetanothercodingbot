@@ -23,6 +23,9 @@ from telegram.ext import (
 )
 
 from session import ClaudeCodeSession, SessionManager
+from tasks import TaskManager
+from claude_interactive import ClaudeSessionPool
+from orchestrator import invoke_orchestrator
 
 # Check if whisper is available
 try:
@@ -40,6 +43,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USERS", "").split(",") if uid]
 CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "claude")
 WORKSPACE_PATH = os.getenv("WORKSPACE_PATH", os.getcwd())
+BOT_REPOSITORY = os.getenv("BOT_REPOSITORY", os.getcwd())
 SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
 
 # Setup logging
@@ -53,9 +57,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global session manager and Claude client
+# Global managers
 session_manager = SessionManager(timeout_minutes=SESSION_TIMEOUT_MINUTES)
 claude_client = ClaudeCodeSession(CLAUDE_CLI_PATH, WORKSPACE_PATH, session_manager)
+task_manager = TaskManager()
+claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
 
 
 async def check_authorization(update: Update) -> bool:
@@ -92,6 +98,7 @@ I'm your AI assistant powered by Claude Code. I can:
 /help - Get help
 /status - Check running tasks
 /clear - Clear conversation
+/cd - Change workspace directory
 
 Just send me a message to get started!
     """
@@ -115,6 +122,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 "Build a REST API for user management"
 "Create a React component for a login form"
 
+*Multi-repository:*
+"in ~/myproject, create a new file"
+"for repository /workspace/app, fix bug"
+Or use: /cd /path/to/workspace
+
 *Research & Planning:*
 "Research best practices for WebSocket servers"
 "Plan a microservices architecture"
@@ -122,6 +134,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 *Commands:*
 /status - Check background tasks
 /clear - Reset conversation
+/cd - Change workspace directory
 /help - Show this message
 
 💡 Tip: I can handle complex multi-step tasks in the background!
@@ -172,28 +185,278 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cd command to change workspace"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+
+    # Get workspace path from command args
+    if not context.args:
+        # Show current workspace
+        current = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+        await update.message.reply_text(
+            f"📂 *Current workspace:*\n`{current}`\n\n"
+            f"Usage: `/cd /path/to/workspace`",
+            parse_mode="Markdown"
+        )
+        return
+
+    workspace = " ".join(context.args)
+
+    # Expand ~ to home directory
+    workspace = os.path.expanduser(workspace)
+
+    # Check if path exists
+    if not os.path.exists(workspace):
+        await update.message.reply_text(
+            f"❌ Path does not exist: `{workspace}`\n\n"
+            f"Please create it first or check the path.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Set workspace
+    session_manager.set_workspace(user_id, workspace)
+
+    await update.message.reply_text(
+        f"✅ Workspace changed to:\n`{workspace}`\n\n"
+        f"All code tasks will now run in this directory.",
+        parse_mode="Markdown"
+    )
+
+
+def extract_workspace_from_message(message: str) -> tuple[Optional[str], str]:
+    """
+    Extract workspace path from message if specified
+    Returns: (workspace_path, cleaned_message)
+
+    Supports patterns like:
+    - "in /path/to/repo, do X"
+    - "in ~/projects/myapp do X"
+    - "for repository /path/repo, do X"
+    """
+    import re
+
+    # Pattern: "in <path>, <rest>" or "in <path> <rest>"
+    pattern1 = r'^in\s+([~/\w\-/.]+)[,\s]+(.+)$'
+    match = re.match(pattern1, message, re.IGNORECASE)
+    if match:
+        workspace = os.path.expanduser(match.group(1).strip())
+        cleaned = match.group(2).strip()
+        return workspace, cleaned
+
+    # Pattern: "for repository <path>, <rest>"
+    pattern2 = r'^for\s+(?:repository|repo|project)\s+([~/\w\-/.]+)[,\s]+(.+)$'
+    match = re.match(pattern2, message, re.IGNORECASE)
+    if match:
+        workspace = os.path.expanduser(match.group(1).strip())
+        cleaned = match.group(2).strip()
+        return workspace, cleaned
+
+    return None, message
+
+
+def detect_task_type(message: str) -> str:
+    """
+    Detect if message requires code execution or just chat
+    Returns: 'code_task', 'chat', 'status_query'
+    """
+    message_lower = message.lower()
+
+    # Code task keywords
+    code_keywords = [
+        'modify', 'change', 'update', 'fix', 'refactor', 'add',
+        'create', 'build', 'implement', 'write code', 'edit',
+        'commit', 'git', 'file', 'repository', 'repo'
+    ]
+
+    # Status query keywords
+    status_keywords = ['status', 'progress', 'tasks', 'running']
+
+    # Check for status queries
+    if any(kw in message_lower for kw in status_keywords):
+        return 'status_query'
+
+    # Check for code tasks
+    if any(kw in message_lower for kw in code_keywords):
+        return 'code_task'
+
+    return 'chat'
+
+
+async def execute_code_task(task: "Task", update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Execute a code task in the background with full tool access"""
+    user_id = update.effective_user.id
+
+    try:
+        # Update task status
+        task_manager.update_task(task.task_id, status="in_progress")
+        logger.info(f"Starting task execution: {task.task_id} in {task.workspace}")
+
+        # Execute using Claude session pool with bot context
+        success, result = await claude_pool.execute_task(
+            task_id=task.task_id,
+            description=task.description,
+            workspace=Path(task.workspace),
+            bot_repo_path=BOT_REPOSITORY,  # Always provide bot context
+            model=task.model
+        )
+
+        # Update task with result
+        if success:
+            task_manager.update_task(
+                task.task_id,
+                status="completed",
+                result=result
+            )
+            logger.info(f"Task {task.task_id} completed successfully")
+
+            # Notify user
+            notification = (
+                f"✅ *Task Complete* (#{task.task_id})\n\n"
+                f"📝 {task.description}\n\n"
+                f"**Result:**\n{result}"
+            )
+        else:
+            task_manager.update_task(
+                task.task_id,
+                status="failed",
+                error=result
+            )
+            logger.error(f"Task {task.task_id} failed: {result}")
+
+            # Notify user of failure
+            notification = (
+                f"❌ *Task Failed* (#{task.task_id})\n\n"
+                f"📝 {task.description}\n\n"
+                f"**Error:**\n{result}"
+            )
+
+        # Send notification (chunk if needed)
+        if len(notification) <= 4096:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=notification,
+                parse_mode="Markdown"
+            )
+        else:
+            # Send description + status first
+            header = notification.split("**Result:**\n")[0] if success else notification.split("**Error:**\n")[0]
+            await context.bot.send_message(chat_id=user_id, text=header, parse_mode="Markdown")
+
+            # Send result/error in chunks
+            content = result
+            chunks = [content[i:i+4096] for i in range(0, len(content), 4096)]
+            for chunk in chunks:
+                await context.bot.send_message(chat_id=user_id, text=chunk)
+
+    except Exception as e:
+        logger.error(f"Task execution error for {task.task_id}: {e}")
+        task_manager.update_task(
+            task.task_id,
+            status="failed",
+            error=str(e)
+        )
+
+        # Notify user
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ *Task Failed* (#{task.task_id})\n\n"
+                 f"An unexpected error occurred:\n{str(e)}",
+            parse_mode="Markdown"
+        )
+
+
+async def show_task_status(user_id: int, update: Update):
+    """Show user's task status"""
+    # Get active tasks
+    active_tasks = task_manager.get_active_tasks(user_id)
+
+    # Get recent completed/failed tasks
+    recent_tasks = task_manager.get_user_tasks(user_id, limit=5)
+    completed = [t for t in recent_tasks if t.status == 'completed'][:3]
+    failed = [t for t in recent_tasks if t.status == 'failed'][:3]
+
+    # Build status message
+    message_parts = ["📊 *Task Status*\n"]
+
+    # Active tasks
+    if active_tasks:
+        message_parts.append(f"\n🔄 *Active Tasks* ({len(active_tasks)}):")
+        for task in active_tasks:
+            status_icon = "⏳" if task.status == "pending" else "⚙️"
+            message_parts.append(
+                f"{status_icon} `#{task.task_id}` - {task.description[:50]}..."
+            )
+    else:
+        message_parts.append("\n✨ No active tasks")
+
+    # Recent completed
+    if completed:
+        message_parts.append(f"\n\n✅ *Recent Completed* ({len(completed)}):")
+        for task in completed:
+            message_parts.append(
+                f"• `#{task.task_id}` - {task.description[:40]}..."
+            )
+
+    # Recent failed
+    if failed:
+        message_parts.append(f"\n\n❌ *Recent Failed* ({len(failed)}):")
+        for task in failed:
+            message_parts.append(
+                f"• `#{task.task_id}` - {task.description[:40]}..."
+            )
+
+    message_parts.append("\n\n💡 Use task ID to see details")
+
+    await update.message.reply_text(
+        "\n".join(message_parts),
+        parse_mode="Markdown"
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle regular text messages"""
+    """Handle regular text messages using orchestrator"""
     if not await check_authorization(update):
         return
 
     user_id = update.effective_user.id
     message_text = update.message.text
 
-    logger.info(f"User {user_id}: {message_text}")
+    logger.info(f"User {user_id} (text): {message_text}")
 
     # Show typing indicator
     await update.message.chat.send_action("typing")
 
-    # Send to Claude Code
-    response = await claude_client.send_message(user_id, message_text)
+    # Get conversation history
+    session = session_manager.get_session(user_id)
+    history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-    # Send response back to user
-    # Telegram has a 4096 character limit, so split if needed
+    # Invoke orchestrator with text input
+    response = await invoke_orchestrator(
+        user_query=message_text,
+        input_method="text",
+        conversation_history=history,
+        current_workspace=session_manager.get_workspace(user_id),
+        bot_repository=BOT_REPOSITORY,
+        workspace_path=WORKSPACE_PATH
+    )
+
+    if not response:
+        # Fallback to direct Claude response
+        logger.warning("Orchestrator failed, using fallback")
+        response = await claude_client.send_message(user_id, message_text)
+
+    # Add to conversation history
+    session_manager.add_message(user_id, "user", message_text)
+    session_manager.add_message(user_id, "assistant", response)
+
+    # Send response to user
     if len(response) <= 4096:
         await update.message.reply_text(response)
     else:
-        # Split into chunks
         chunks = [response[i:i+4096] for i in range(0, len(response), 4096)]
         for chunk in chunks:
             await update.message.reply_text(chunk)
@@ -226,7 +489,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"User {user_id} sent voice message (duration: {voice_message.duration}s)")
 
-    # Show typing indicator only
+    # Show typing indicator
     await update.message.chat.send_action("typing")
 
     try:
@@ -256,10 +519,30 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(f"User {user_id} (voice): {transcription}")
 
-        # Process transcription with Claude
-        response = await claude_client.send_message(user_id, transcription)
+        # Get conversation history
+        session = session_manager.get_session(user_id)
+        history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-        # Send response (without showing transcription)
+        # Invoke orchestrator with VOICE input (be permissive with transcription errors)
+        response = await invoke_orchestrator(
+            user_query=transcription,
+            input_method="voice",  # Important: tells orchestrator to be permissive
+            conversation_history=history,
+            current_workspace=session_manager.get_workspace(user_id),
+            bot_repository=BOT_REPOSITORY,
+            workspace_path=WORKSPACE_PATH
+        )
+
+        if not response:
+            # Fallback to direct Claude response
+            logger.warning("Orchestrator failed, using fallback")
+            response = await claude_client.send_message(user_id, transcription)
+
+        # Add to conversation history
+        session_manager.add_message(user_id, "user", transcription)
+        session_manager.add_message(user_id, "assistant", response)
+
+        # Send response to user (without showing transcription)
         if len(response) <= 4096:
             await update.message.reply_text(response)
         else:
@@ -310,6 +593,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("clear", clear_command))
+    application.add_handler(CommandHandler("cd", cd_command))
 
     # Handle messages
     application.add_handler(
