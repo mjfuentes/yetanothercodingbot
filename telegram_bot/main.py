@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram Bot for Claude Code Orchestrator
-Phase 1: Basic message handling and Claude Code CLI integration
+Phase 2: Persistent sessions with conversation history
 """
 
 import asyncio
@@ -20,6 +20,8 @@ from telegram.ext import (
     filters,
 )
 
+from session import ClaudeCodeSession, SessionManager
+
 # Load environment variables
 load_dotenv()
 
@@ -28,6 +30,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USERS", "").split(",") if uid]
 CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "claude")
 WORKSPACE_PATH = os.getenv("WORKSPACE_PATH", os.getcwd())
+SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
 
 # Setup logging
 logging.basicConfig(
@@ -40,43 +43,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-class ClaudeCodeClient:
-    """Wrapper for Claude Code CLI interactions"""
-
-    def __init__(self, cli_path: str, workspace: str):
-        self.cli_path = cli_path
-        self.workspace = workspace
-        self.sessions: Dict[int, subprocess.Popen] = {}
-
-    async def send_message(self, user_id: int, message: str) -> str:
-        """Send message to Claude Code and get response"""
-        try:
-            # For now, use non-interactive mode
-            # In Phase 2, we'll implement persistent sessions
-            result = subprocess.run(
-                [self.cli_path, "-p", "--model", "haiku", message],
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minute timeout
-                cwd=self.workspace
-            )
-
-            if result.returncode != 0:
-                logger.error(f"Claude CLI error: {result.stderr}")
-                return f"Error: {result.stderr}"
-
-            return result.stdout.strip()
-
-        except subprocess.TimeoutExpired:
-            return "Request timed out after 5 minutes. Please try a simpler query."
-        except Exception as e:
-            logger.error(f"Error communicating with Claude: {e}")
-            return f"Error: {str(e)}"
-
-
-# Global Claude client
-claude_client = ClaudeCodeClient(CLAUDE_CLI_PATH, WORKSPACE_PATH)
+# Global session manager and Claude client
+session_manager = SessionManager(timeout_minutes=SESSION_TIMEOUT_MINUTES)
+claude_client = ClaudeCodeSession(CLAUDE_CLI_PATH, WORKSPACE_PATH, session_manager)
 
 
 async def check_authorization(update: Update) -> bool:
@@ -156,10 +125,25 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_authorization(update):
         return
 
-    # Placeholder for Phase 4
-    await update.message.reply_text(
-        "📊 Status tracking will be available in Phase 4!"
-    )
+    user_id = update.effective_user.id
+    stats = session_manager.get_session_stats(user_id)
+
+    if not stats['exists']:
+        await update.message.reply_text("📊 No active session. Send a message to start!")
+        return
+
+    message = f"""📊 *Session Status*
+
+💬 Messages: {stats['message_count']}
+👤 User messages: {stats['user_messages']}
+🤖 Assistant messages: {stats['assistant_messages']}
+🕒 Created: {stats['created_at'][:19]}
+⏱️ Last activity: {stats['last_activity'][:19]}
+
+Use /clear to reset conversation.
+    """
+
+    await update.message.reply_text(message, parse_mode="Markdown")
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,7 +153,10 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
 
-    # In Phase 2, this will clear the session
+    # Clear the session
+    session_manager.clear_session(user_id)
+    logger.info(f"Cleared session for user {user_id}")
+
     await update.message.reply_text(
         "🗑️ Conversation cleared! Starting fresh."
     )
@@ -222,6 +209,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
+    """Periodic task to cleanup stale sessions"""
+    count = session_manager.cleanup_stale_sessions()
+    if count > 0:
+        logger.info(f"Cleanup task: removed {count} stale sessions")
+
+
 def main():
     """Start the bot"""
     if not TELEGRAM_BOT_TOKEN:
@@ -252,6 +246,11 @@ def main():
 
     # Error handler
     application.add_error_handler(error_handler)
+
+    # Schedule cleanup task (every 30 minutes)
+    job_queue = application.job_queue
+    job_queue.run_repeating(cleanup_task, interval=1800, first=1800)
+    logger.info("Scheduled cleanup task (every 30 minutes)")
 
     # Start bot
     logger.info("Bot started successfully!")

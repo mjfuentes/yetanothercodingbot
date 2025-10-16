@@ -11,11 +11,11 @@ Control Claude Code from your phone via Telegram bot.
 - 📊 Cost tracking and limits
 - 🔒 User whitelist security
 
-## Current Status: Phase 1 (MVP)
+## Current Status: Phase 2 Complete
 
 ✅ Basic Telegram bot
 ✅ Claude Code CLI integration
-⏳ Session management (Phase 2)
+✅ Session management with conversation history
 ⏳ Task orchestration (Phase 3-4)
 ⏳ Voice & rich formatting (Phase 5-6)
 ⏳ Production hardening (Phase 7)
@@ -126,8 +126,8 @@ LOG_LEVEL=INFO
 
 - `/start` - Show welcome message
 - `/help` - Get help
-- `/status` - Check running tasks (Phase 4+)
-- `/clear` - Reset conversation (Phase 2+)
+- `/status` - Check session stats and message count
+- `/clear` - Reset conversation history
 - `/cost` - Show usage costs (Phase 7+)
 
 ## Project Structure
@@ -164,7 +164,7 @@ See [TELEGRAM_BOT_PLAN.md](TELEGRAM_BOT_PLAN.md) for detailed breakdown.
 ## Development Roadmap
 
 - [x] **Phase 1**: Basic bot + Claude integration (Week 1)
-- [ ] **Phase 2**: Persistent sessions (Week 1)
+- [x] **Phase 2**: Persistent sessions (Week 1)
 - [ ] **Phase 3**: Orchestrator agent (Week 2)
 - [ ] **Phase 4**: Worker agents (Week 2-3)
 - [ ] **Phase 5**: Voice support (Week 3)
