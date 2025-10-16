@@ -13,13 +13,12 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
 )
 
@@ -84,24 +83,16 @@ async def check_authorization(update: Update) -> bool:
     return True
 
 
-def get_action_buttons() -> InlineKeyboardMarkup:
-    """Create inline keyboard with quick action buttons"""
-    keyboard = [
-        [
-            InlineKeyboardButton("🗑️ Clear Chat", callback_data="clear_conversation"),
-            InlineKeyboardButton("📊 Status", callback_data="show_status"),
-        ],
-        [
-            InlineKeyboardButton("📚 Help", callback_data="show_help"),
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     if not await check_authorization(update):
         return
+
+    user_id = update.effective_user.id
+
+    # Clear conversation history on /start
+    session_manager.clear_session(user_id)
+    logger.info(f"Cleared session for user {user_id} via /start")
 
     # Get recent changes
     try:
@@ -127,12 +118,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 welcome_message += f"• {parts[1]}\n"
         welcome_message += "\n"
 
-    welcome_message += "Send me a message or /help to see what I can do!"
+    welcome_message += "Send me a message or /help to see what I can do!\n\n"
+    welcome_message += "💭 _Conversation history cleared_"
 
     await update.message.reply_text(
         welcome_message,
-        parse_mode="Markdown",
-        reply_markup=get_action_buttons()
+        parse_mode="Markdown"
     )
 
 
@@ -162,9 +153,10 @@ Or use: /cd /path/to/workspace
 "Plan a microservices architecture"
 
 *Commands:*
+/start - Start fresh (clears history)
 /status - Check background tasks
 /clear - Reset conversation
-/cd - Change workspace directory
+/cd - Change workspace (clears history)
 /help - Show this message
 
 💡 Tip: I can handle complex multi-step tasks in the background!
@@ -276,12 +268,21 @@ async def cd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Get current workspace to check if it's actually changing
+    current_workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+
     # Set workspace
     session_manager.set_workspace(user_id, workspace)
 
+    # Clear conversation history when switching workspaces
+    if workspace != current_workspace:
+        session_manager.clear_session(user_id)
+        logger.info(f"Cleared session for user {user_id} due to workspace change: {current_workspace} -> {workspace}")
+
     await update.message.reply_text(
         f"✅ Workspace changed to:\n`{workspace}`\n\n"
-        f"All code tasks will now run in this directory.",
+        f"All code tasks will now run in this directory.\n"
+        f"💭 Conversation history cleared.",
         parse_mode="Markdown"
     )
 
@@ -585,6 +586,265 @@ def transcribe_audio(file_path: str) -> Optional[str]:
         return None
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document uploads (PDFs, text files, code files, etc.)"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+    document = update.message.document
+    caption = update.message.caption or ""
+
+    logger.info(f"User {user_id} sent document: {document.file_name} ({document.mime_type})")
+
+    # Check file size (limit to 20MB for safety)
+    if document.file_size > 20 * 1024 * 1024:
+        await update.message.reply_text(
+            "❌ File too large. Maximum size is 20MB."
+        )
+        return
+
+    # Show typing indicator
+    await update.message.chat.send_action("typing")
+
+    try:
+        # Download file
+        file = await context.bot.get_file(document.file_id)
+
+        # Create temp file with original extension
+        file_ext = Path(document.file_name).suffix or ".txt"
+        with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
+            tmp_path = tmp.name
+
+        # Download to temp file
+        await file.download_to_drive(tmp_path)
+        logger.info(f"Downloaded document to {tmp_path}")
+
+        # Read file content (text-based files only)
+        try:
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+        except UnicodeDecodeError:
+            # Binary file (PDF, images, etc.) - just provide path
+            file_content = f"[Binary file: {document.file_name}]"
+            logger.info(f"Binary file detected: {document.file_name}")
+
+        # Build message with file context
+        if caption:
+            message_text = f"{caption}\n\n[Attached file: {document.file_name}]\n{file_content[:2000]}"
+        else:
+            message_text = f"I've uploaded a file: {document.file_name}\n\n{file_content[:2000]}"
+
+        if len(file_content) > 2000:
+            message_text += f"\n\n... (file truncated, total {len(file_content)} chars)"
+
+        logger.info(f"User {user_id} (document): {message_text[:100]}...")
+
+        # Send immediate acknowledgment
+        status_msg = await update.message.reply_text("⏳ Processing file...")
+
+        # Show typing indicator continuously in background
+        async def keep_typing():
+            try:
+                while True:
+                    await update.message.chat.send_action("typing")
+                    await asyncio.sleep(4)
+            except:
+                pass
+
+        typing_task = asyncio.create_task(keep_typing())
+
+        try:
+            # Get conversation history
+            session = session_manager.get_session(user_id)
+            history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+            # Invoke orchestrator with file context
+            response = await invoke_orchestrator(
+                user_query=message_text,
+                input_method="text",
+                conversation_history=history,
+                current_workspace=session_manager.get_workspace(user_id),
+                bot_repository=BOT_REPOSITORY,
+                workspace_path=WORKSPACE_PATH,
+                task_manager=task_manager
+            )
+
+            if not response:
+                # Fallback to direct Claude response
+                logger.warning("Orchestrator failed, using fallback")
+                response = await claude_client.send_message(user_id, message_text)
+
+            # Check if response is a BACKGROUND_TASK request
+            if response and response.startswith("BACKGROUND_TASK|"):
+                parts = response.split("|", 2)
+                if len(parts) == 3:
+                    _, task_desc, user_message = parts
+
+                    # Create background task
+                    workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                    task = task_manager.create_task(
+                        user_id=user_id,
+                        description=task_desc,
+                        workspace=workspace,
+                        model="sonnet"
+                    )
+
+                    # Execute task in background
+                    asyncio.create_task(execute_code_task(task, update, context))
+
+                    # Send user-facing message
+                    response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+
+            # Add to conversation history
+            session_manager.add_message(user_id, "user", message_text)
+            session_manager.add_message(user_id, "assistant", response)
+
+            # Delete status message
+            await status_msg.delete()
+
+            # Format and send response to user
+            formatted_chunks = format_telegram_response(
+                response,
+                workspace_path=session_manager.get_workspace(user_id)
+            )
+
+            for chunk in formatted_chunks:
+                await update.message.reply_text(chunk, parse_mode="HTML")
+
+        finally:
+            # Stop typing indicator
+            typing_task.cancel()
+            # Clean up temp file
+            Path(tmp_path).unlink(missing_ok=True)
+
+    except Exception as e:
+        logger.error(f"Document handling error: {e}")
+        await update.message.reply_text(
+            "❌ Error processing file. Please try again."
+        )
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo uploads"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+    photo = update.message.photo[-1]  # Get highest resolution
+    caption = update.message.caption or ""
+
+    logger.info(f"User {user_id} sent photo")
+
+    # Show typing indicator
+    await update.message.chat.send_action("typing")
+
+    try:
+        # Download photo
+        file = await context.bot.get_file(photo.file_id)
+
+        # Create temp file
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        # Download to temp file
+        await file.download_to_drive(tmp_path)
+        logger.info(f"Downloaded photo to {tmp_path}")
+
+        # Build message with photo context
+        if caption:
+            message_text = f"{caption}\n\n[Attached image: photo.jpg]"
+        else:
+            message_text = "I've uploaded an image. Can you analyze it?"
+
+        logger.info(f"User {user_id} (photo): {message_text}")
+
+        # Send immediate acknowledgment
+        status_msg = await update.message.reply_text("⏳ Processing image...")
+
+        # Show typing indicator continuously in background
+        async def keep_typing():
+            try:
+                while True:
+                    await update.message.chat.send_action("typing")
+                    await asyncio.sleep(4)
+            except:
+                pass
+
+        typing_task = asyncio.create_task(keep_typing())
+
+        try:
+            # Get conversation history
+            session = session_manager.get_session(user_id)
+            history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+            # Invoke orchestrator with image context
+            response = await invoke_orchestrator(
+                user_query=message_text,
+                input_method="text",
+                conversation_history=history,
+                current_workspace=session_manager.get_workspace(user_id),
+                bot_repository=BOT_REPOSITORY,
+                workspace_path=WORKSPACE_PATH,
+                task_manager=task_manager,
+                image_path=tmp_path  # Pass image file path
+            )
+
+            if not response:
+                # Fallback to direct Claude response
+                logger.warning("Orchestrator failed, using fallback")
+                response = await claude_client.send_message(user_id, message_text)
+
+            # Check if response is a BACKGROUND_TASK request
+            if response and response.startswith("BACKGROUND_TASK|"):
+                parts = response.split("|", 2)
+                if len(parts) == 3:
+                    _, task_desc, user_message = parts
+
+                    # Create background task
+                    workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                    task = task_manager.create_task(
+                        user_id=user_id,
+                        description=task_desc,
+                        workspace=workspace,
+                        model="sonnet"
+                    )
+
+                    # Execute task in background
+                    asyncio.create_task(execute_code_task(task, update, context))
+
+                    # Send user-facing message
+                    response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+
+            # Add to conversation history
+            session_manager.add_message(user_id, "user", message_text)
+            session_manager.add_message(user_id, "assistant", response)
+
+            # Delete status message
+            await status_msg.delete()
+
+            # Format and send response to user
+            formatted_chunks = format_telegram_response(
+                response,
+                workspace_path=session_manager.get_workspace(user_id)
+            )
+
+            for chunk in formatted_chunks:
+                await update.message.reply_text(chunk, parse_mode="HTML")
+
+        finally:
+            # Stop typing indicator
+            typing_task.cancel()
+            # Clean up temp file
+            Path(tmp_path).unlink(missing_ok=True)
+
+    except Exception as e:
+        logger.error(f"Photo handling error: {e}")
+        await update.message.reply_text(
+            "❌ Error processing image. Please try again."
+        )
+
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle voice messages with Whisper transcription"""
     if not await check_authorization(update):
@@ -708,127 +968,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button clicks from inline keyboard"""
-    query = update.callback_query
-    user_id = query.from_user.id
-
-    # Answer callback to stop loading animation
-    await query.answer()
-
-    # Check authorization
-    if ALLOWED_USERS and user_id not in ALLOWED_USERS:
-        await query.edit_message_text("⛔ Unauthorized. Please contact the bot owner.")
-        return
-
-    callback_data = query.data
-
-    # Handle different button actions
-    if callback_data == "clear_conversation":
-        # Clear the session
-        session_manager.clear_session(user_id)
-        logger.info(f"Cleared session for user {user_id} via button")
-
-        await query.edit_message_text(
-            "🗑️ Conversation cleared! Starting fresh.\n\nSend me a message to begin.",
-            reply_markup=get_action_buttons()
-        )
-
-    elif callback_data == "show_status":
-        # Get session stats
-        stats = session_manager.get_session_stats(user_id)
-
-        if not stats['exists']:
-            await query.edit_message_text(
-                "📊 No active session. Send a message to start!",
-                reply_markup=get_action_buttons()
-            )
-            return
-
-        message = f"""📊 *Session Status*
-
-💬 Messages: {stats['message_count']}
-👤 User messages: {stats['user_messages']}
-🤖 Assistant messages: {stats['assistant_messages']}
-🕒 Created: {stats['created_at'][:19]}
-⏱️ Last activity: {stats['last_activity'][:19]}
-        """
-
-        await query.edit_message_text(
-            message,
-            parse_mode="Markdown",
-            reply_markup=get_action_buttons()
-        )
-
-    elif callback_data == "show_help":
-        help_text = """
-📚 *How to use me:*
-
-*Simple queries:*
-"What's 2+2?"
-"Explain async/await in Python"
-
-*Code generation:*
-"Build a REST API for user management"
-"Create a React component for a login form"
-
-*Multi-repository:*
-"in ~/myproject, create a new file"
-"for repository /workspace/app, fix bug"
-Or use: /cd /path/to/workspace
-
-*Research & Planning:*
-"Research best practices for WebSocket servers"
-"Plan a microservices architecture"
-
-*Commands:*
-/status - Check background tasks
-/clear - Reset conversation
-/cd - Change workspace directory
-/help - Show this message
-
-💡 Tip: I can handle complex multi-step tasks in the background!
-        """
-
-        await query.edit_message_text(
-            help_text,
-            parse_mode="Markdown",
-            reply_markup=get_action_buttons()
-        )
-
-    elif callback_data == "show_start":
-        # Get recent changes
-        try:
-            result = subprocess.run(
-                ["git", "log", "--oneline", "-3"],
-                cwd=BOT_REPOSITORY,
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            recent_changes = result.stdout.strip() if result.returncode == 0 else None
-        except:
-            recent_changes = None
-
-        welcome_message = "👋 *Hey!*\n\n"
-
-        if recent_changes:
-            welcome_message += "*Recent updates:*\n"
-            for line in recent_changes.split('\n')[:2]:
-                parts = line.split(' ', 1)
-                if len(parts) == 2:
-                    welcome_message += f"• {parts[1]}\n"
-            welcome_message += "\n"
-
-        welcome_message += "Send me a message or /help to see what I can do!"
-
-        await query.edit_message_text(
-            welcome_message,
-            parse_mode="Markdown",
-            reply_markup=get_action_buttons()
-        )
-
-
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
     logger.error(f"Update {update} caused error {context.error}")
@@ -863,12 +1002,12 @@ def main():
     # Set bot commands (updates Telegram menu)
     async def post_init(app: Application):
         await app.bot.set_my_commands([
-            BotCommand("start", "Show welcome message"),
+            BotCommand("start", "Start fresh (clears history)"),
             BotCommand("help", "Get help"),
             BotCommand("status", "Check running tasks"),
             BotCommand("clear", "Clear conversation"),
             BotCommand("restart", "Restart the bot"),
-            BotCommand("cd", "Change workspace directory"),
+            BotCommand("cd", "Change workspace (clears history)"),
         ])
 
     application.post_init = post_init
@@ -881,15 +1020,18 @@ def main():
     application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("cd", cd_command))
 
-    # Handle button callbacks
-    application.add_handler(CallbackQueryHandler(button_callback_handler))
-
     # Handle messages
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
     application.add_handler(
         MessageHandler(filters.VOICE, handle_voice)
+    )
+    application.add_handler(
+        MessageHandler(filters.Document.ALL, handle_document)
+    )
+    application.add_handler(
+        MessageHandler(filters.PHOTO, handle_photo)
     )
 
     # Error handler
