@@ -13,6 +13,7 @@ data/*.json
 # Logs
 logs/*.log
 !logs/.gitkeep
+bot.log
 
 # IDE
 .vscode/

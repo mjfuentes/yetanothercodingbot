@@ -1,5 +1,65 @@
 # Development Guide
 
+## Background Task System
+
+### How It Works
+
+The bot now intelligently determines when tasks are "big enough" to run in the background:
+
+1. **User sends message** → Telegram bot receives it
+2. **Orchestrator analyzes** → Determines if task is simple (answer immediately) or complex (run in background)
+3. **For complex tasks**:
+   - Orchestrator responds with: `BACKGROUND_TASK: <description>`
+   - Bot creates task via `TaskManager`
+   - Task executes in background using `ClaudeSessionPool`
+   - User gets immediate acknowledgment: "🚀 Background Task Started"
+4. **When task completes**:
+   - Bot sends notification to user with results
+   - Task marked as "completed" in `data/tasks.json`
+
+### What Tasks Run in Background?
+
+**Complex tasks** (background execution):
+- "refactor the entire authentication system"
+- "implement a new feature with tests"
+- "fix all type errors in the codebase"
+- "build a new API endpoint with documentation"
+- "migrate database schema and update all models"
+
+**Simple tasks** (immediate response):
+- "what does this function do?"
+- "explain the architecture"
+- "show me the status"
+- "read and summarize this file"
+
+### Key Files
+
+- `telegram_bot/orchestrator.py`: Analyzes tasks, returns `BACKGROUND_TASK|desc|message` format
+- `telegram_bot/main.py`: Parses orchestrator response, creates background tasks
+- `telegram_bot/tasks.py`: Tracks task status (pending/in_progress/completed/failed)
+- `telegram_bot/claude_interactive.py`: Executes tasks with full Claude Code tool access
+- `data/tasks.json`: Persistent task storage
+
+### Task Notifications
+
+When a background task completes, the bot automatically sends:
+
+**On Success:**
+```
+✅ Task Complete (#abc123)
+📝 [Task description]
+**Result:**
+[What was done]
+```
+
+**On Failure:**
+```
+❌ Task Failed (#abc123)
+📝 [Task description]
+**Error:**
+[Error message]
+```
+
 ## When to Restart the Bot
 
 ### 🔴 RESTART REQUIRED

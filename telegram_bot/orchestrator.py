@@ -46,7 +46,8 @@ async def invoke_orchestrator(
     current_workspace: Optional[str],
     bot_repository: str,
     workspace_path: str,
-    timeout: int = 300
+    timeout: int = 300,
+    task_manager=None  # TaskManager instance for background task creation
 ) -> Optional[str]:
     """
     Invoke orchestrator agent via Claude Code
@@ -70,6 +71,24 @@ async def invoke_orchestrator(
         logger.info(f"Blocking work due to dirty repos")
         return blocking_msg
 
+    # Get active tasks info if task_manager provided
+    active_tasks_info = []
+    if task_manager:
+        # Get user's active tasks (pending or in_progress)
+        user_id = None  # We need to pass user_id to this function
+        # For now, get all active tasks - orchestrator will filter by context
+        all_tasks = task_manager.tasks.values()
+        active_tasks_info = [
+            {
+                "task_id": t.task_id,
+                "description": t.description,
+                "status": t.status,
+                "workspace": t.workspace
+            }
+            for t in all_tasks
+            if t.status in ["pending", "in_progress"]
+        ]
+
     # Build context for orchestrator
     context = {
         "user_query": user_query,
@@ -78,10 +97,10 @@ async def invoke_orchestrator(
         "current_workspace": current_workspace or workspace_path,
         "available_repositories": available_repos,
         "bot_repository": bot_repository,
-        "active_tasks": []  # TODO: populate from TaskManager if needed
+        "active_tasks": active_tasks_info
     }
 
-    # Format prompt with context
+    # Format prompt with context - ENHANCED with background task instructions
     prompt = f"""CONTEXT:
 {json.dumps(context, indent=2)}
 
@@ -92,6 +111,26 @@ IMPORTANT CAPABILITIES:
 - You can access ANY repository in available_repositories by using absolute paths
 - Example: To list files in /Users/matifuentes/Workspace/groovetherapy, use: Glob with pattern="*" and path="/Users/matifuentes/Workspace/groovetherapy"
 - Don't say you can't access repos - just use the tools with absolute paths!
+
+BACKGROUND TASK SUPPORT:
+- For COMPLEX tasks that involve multiple file changes, refactoring, or take >2 minutes, indicate this is a BACKGROUND_TASK
+- To trigger background task, start your response with: "BACKGROUND_TASK: <brief description>"
+- Then provide: The task will be executed in the background with full tool access
+- Background tasks get full Claude Code access (Read, Write, Edit, Bash, Grep, Glob, etc.)
+- User will be notified when the task completes
+
+Examples of tasks that should be BACKGROUND:
+- "refactor the entire authentication system"
+- "implement a new feature with tests"
+- "migrate database schema and update all models"
+- "fix all type errors in the codebase"
+- "build a new API endpoint with documentation"
+
+Examples of tasks that should be IMMEDIATE:
+- "what does this function do?"
+- "explain the architecture"
+- "show me the status of tasks"
+- "read and summarize this file"
 
 Remember:
 - input_method="{input_method}" ({'be permissive with voice errors' if input_method == 'voice' else 'exact text input'})
@@ -116,15 +155,14 @@ User query: {user_query}"""
         logger.debug(f"Command: {' '.join(cmd)}")
         logger.debug(f"Working directory: {bot_repository}")
 
-        # Run from workspace root to access all repos
-        # Agent config from bot_repository/.claude/agents won't be available,
-        # so we need to pass agent instructions inline via prompt
+        # Run from bot_repository to load orchestrator agent config from .claude/agents/
+        # Orchestrator can still access other repos using absolute paths via Glob/Grep/Read tools
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=workspace_path  # Run from workspace root to access all projects
+            cwd=bot_repository  # Run from bot repo to load .claude/agents/orchestrator.md
         )
 
         try:
@@ -152,6 +190,17 @@ User query: {user_query}"""
                 return None
 
             logger.info(f"Orchestrator response: {output[:100]}...")
+
+            # Check if this is a background task request
+            if output.startswith("BACKGROUND_TASK:"):
+                lines = output.split('\n', 1)
+                task_desc = lines[0].replace("BACKGROUND_TASK:", "").strip()
+                user_message = lines[1].strip() if len(lines) > 1 else "Task queued for background execution."
+
+                # We'll return a special format that main.py can parse
+                # Format: "BACKGROUND_TASK|description|user_message"
+                return f"BACKGROUND_TASK|{task_desc}|{user_message}"
+
             return output
 
         except asyncio.TimeoutError:
