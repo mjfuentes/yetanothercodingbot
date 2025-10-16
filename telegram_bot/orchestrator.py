@@ -47,7 +47,8 @@ async def invoke_orchestrator(
     bot_repository: str,
     workspace_path: str,
     timeout: int = 300,
-    task_manager=None  # TaskManager instance for background task creation
+    task_manager=None,  # TaskManager instance for background task creation
+    image_path: Optional[str] = None  # Path to uploaded image
 ) -> Optional[str]:
     """
     Invoke orchestrator agent via Claude Code
@@ -100,6 +101,10 @@ async def invoke_orchestrator(
         "active_tasks": active_tasks_info
     }
 
+    # Add image path if provided
+    if image_path:
+        context["image_path"] = image_path
+
     # Format prompt with context - ENHANCED with background task instructions
     prompt = f"""CONTEXT:
 {json.dumps(context, indent=2)}
@@ -138,6 +143,7 @@ Remember:
 - Current workspace: {current_workspace or workspace_path}
 - USE CONVERSATION CONTEXT: If user just asked about a specific repo, assume subsequent actions apply to that repo
 - Compose user-facing response (concise, mobile-friendly)
+{'- IMAGE ATTACHED: Use Read tool to view image at: ' + image_path if image_path else ''}
 
 User query: {user_query}"""
 
