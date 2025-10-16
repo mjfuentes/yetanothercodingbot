@@ -5,6 +5,8 @@ Phase 3-4: Orchestrator & worker task management
 
 import json
 import logging
+import os
+import signal
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -12,6 +14,19 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def is_process_alive(pid: int) -> bool:
+    """Check if process with given PID is still running"""
+    if pid is None:
+        return False
+
+    try:
+        # Send signal 0 - checks if process exists without killing it
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 
 @dataclass
@@ -27,6 +42,7 @@ class Task:
     workspace: str  # Repository/workspace path
     result: Optional[str] = None
     error: Optional[str] = None
+    pid: Optional[int] = None  # Process ID for running tasks
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -62,6 +78,28 @@ class TaskManager:
                     self.tasks[task_id] = Task.from_dict(task_data)
 
             logger.info(f"Loaded {len(self.tasks)} tasks from disk")
+
+            # FIX #1 & #3: Check in_progress tasks - mark as failed if process died
+            in_progress_tasks = [
+                task for task in self.tasks.values()
+                if task.status == "in_progress"
+            ]
+
+            if in_progress_tasks:
+                for task in in_progress_tasks:
+                    if task.pid and is_process_alive(task.pid):
+                        # Task survived restart! Process still running
+                        logger.info(f"Task {task.task_id} (PID {task.pid}) still running after restart")
+                    else:
+                        # Process died (or no PID tracked)
+                        task.status = "failed"
+                        task.error = "Task cancelled due to bot restart"
+                        task.updated_at = datetime.now().isoformat()
+                        logger.warning(f"Cleared stale task {task.task_id}: {task.description}")
+
+                # Save updated state
+                self._save_tasks()
+
         except Exception as e:
             logger.error(f"Error loading tasks: {e}")
 
@@ -112,7 +150,8 @@ class TaskManager:
         task_id: str,
         status: Optional[str] = None,
         result: Optional[str] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        pid: Optional[int] = None
     ):
         """Update task status"""
         if task_id not in self.tasks:
@@ -127,11 +166,13 @@ class TaskManager:
             task.result = result
         if error:
             task.error = error
+        if pid is not None:
+            task.pid = pid
 
         task.updated_at = datetime.now().isoformat()
         self._save_tasks()
 
-        logger.info(f"Updated task {task_id}: status={status}")
+        logger.info(f"Updated task {task_id}: status={status}, pid={pid}")
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """Get task by ID"""

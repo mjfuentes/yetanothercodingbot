@@ -30,11 +30,12 @@ class ClaudeInteractiveSession:
         self.task_id = task_id
 
         try:
-            # Start Claude in interactive mode
+            # Start Claude in interactive mode with auto-approval for background tasks
             cmd = [
                 "claude",
                 "chat",
-                "--model", self.model
+                "--model", self.model,
+                "--permission-mode", "bypassPermissions"  # Auto-approve file operations
             ]
 
             logger.info(f"Starting Claude interactive session for task {task_id}")
@@ -176,8 +177,12 @@ class ClaudeSessionPool:
         workspace: Path,
         bot_repo_path: Optional[str] = None,
         model: str = "sonnet"
-    ) -> tuple[bool, str]:
-        """Execute a task using session pool"""
+    ) -> tuple[bool, str, Optional[int]]:
+        """Execute a task using session pool
+
+        Returns:
+            (success, result, pid) - pid is the Claude process ID if available
+        """
 
         # Wait if at capacity
         while len(self.active_sessions) >= self.max_concurrent:
@@ -191,7 +196,11 @@ class ClaudeSessionPool:
         try:
             # Execute with bot context
             success, result = await session.execute_task(description, bot_repo_path)
-            return success, result
+
+            # Get PID if process is still alive
+            pid = session.process.pid if session.process else None
+
+            return success, result, pid
 
         finally:
             # Cleanup

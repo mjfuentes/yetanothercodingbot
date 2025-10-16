@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -59,6 +59,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Reduce HTTP/Telegram noise in logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+
 # Global managers
 session_manager = SessionManager(timeout_minutes=SESSION_TIMEOUT_MINUTES)
 claude_client = ClaudeCodeSession(CLAUDE_CLI_PATH, WORKSPACE_PATH, session_manager)
@@ -99,26 +103,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_authorization(update):
         return
 
-    welcome_message = """
-🤖 *Claude Code Orchestrator Bot*
+    # Get recent changes
+    try:
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-3"],
+            cwd=BOT_REPOSITORY,
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        recent_changes = result.stdout.strip() if result.returncode == 0 else None
+    except:
+        recent_changes = None
 
-I'm your AI assistant powered by Claude Code. I can:
-- Answer questions
-- Write and debug code
-- Research technologies
-- Plan and build projects
-- Manage background tasks
+    welcome_message = "👋 *Hey!*\n\n"
 
-*Commands:*
-/start - Show this message
-/help - Get help
-/status - Check running tasks
-/clear - Clear conversation
-/restart - Restart the bot
-/cd - Change workspace directory
+    if recent_changes:
+        welcome_message += "*Recent updates:*\n"
+        for line in recent_changes.split('\n')[:2]:  # Show last 2 commits
+            # Format: hash message -> • message
+            parts = line.split(' ', 1)
+            if len(parts) == 2:
+                welcome_message += f"• {parts[1]}\n"
+        welcome_message += "\n"
 
-Just send me a message to get started!
-    """
+    welcome_message += "Send me a message or /help to see what I can do!"
 
     await update.message.reply_text(
         welcome_message,
@@ -346,13 +355,18 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
         logger.info(f"Starting task execution: {task.task_id} in {task.workspace}")
 
         # Execute using Claude session pool with bot context
-        success, result = await claude_pool.execute_task(
+        success, result, pid = await claude_pool.execute_task(
             task_id=task.task_id,
             description=task.description,
             workspace=Path(task.workspace),
             bot_repo_path=BOT_REPOSITORY,  # Always provide bot context
             model=task.model
         )
+
+        # Store PID for task persistence
+        if pid:
+            task_manager.update_task(task.task_id, pid=pid)
+            logger.info(f"Task {task.task_id} running with PID {pid}")
 
         # Update task with result
         if success:
@@ -503,13 +517,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conversation_history=history,
         current_workspace=session_manager.get_workspace(user_id),
         bot_repository=BOT_REPOSITORY,
-        workspace_path=WORKSPACE_PATH
+        workspace_path=WORKSPACE_PATH,
+        task_manager=task_manager
     )
 
         if not response:
             # Fallback to direct Claude response
             logger.warning("Orchestrator failed, using fallback")
             response = await claude_client.send_message(user_id, message_text)
+
+        # Check if response is a BACKGROUND_TASK request
+        if response and response.startswith("BACKGROUND_TASK|"):
+            parts = response.split("|", 2)
+            if len(parts) == 3:
+                _, task_desc, user_message = parts
+
+                # Create background task
+                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                task = task_manager.create_task(
+                    user_id=user_id,
+                    description=task_desc,
+                    workspace=workspace,
+                    model="sonnet"
+                )
+
+                # Execute task in background
+                asyncio.create_task(execute_code_task(task, update, context))
+
+                # Send user-facing message
+                response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Add to conversation history
         session_manager.add_message(user_id, "user", message_text)
@@ -615,13 +651,35 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conversation_history=history,
             current_workspace=session_manager.get_workspace(user_id),
             bot_repository=BOT_REPOSITORY,
-            workspace_path=WORKSPACE_PATH
+            workspace_path=WORKSPACE_PATH,
+            task_manager=task_manager
         )
 
             if not response:
                 # Fallback to direct Claude response
                 logger.warning("Orchestrator failed, using fallback")
                 response = await claude_client.send_message(user_id, transcription)
+
+            # Check if response is a BACKGROUND_TASK request
+            if response and response.startswith("BACKGROUND_TASK|"):
+                parts = response.split("|", 2)
+                if len(parts) == 3:
+                    _, task_desc, user_message = parts
+
+                    # Create background task
+                    workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                    task = task_manager.create_task(
+                        user_id=user_id,
+                        description=task_desc,
+                        workspace=workspace,
+                        model="sonnet"
+                    )
+
+                    # Execute task in background
+                    asyncio.create_task(execute_code_task(task, update, context))
+
+                    # Send user-facing message
+                    response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
             # Add to conversation history
             session_manager.add_message(user_id, "user", transcription)
@@ -738,6 +796,38 @@ Or use: /cd /path/to/workspace
             reply_markup=get_action_buttons()
         )
 
+    elif callback_data == "show_start":
+        # Get recent changes
+        try:
+            result = subprocess.run(
+                ["git", "log", "--oneline", "-3"],
+                cwd=BOT_REPOSITORY,
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            recent_changes = result.stdout.strip() if result.returncode == 0 else None
+        except:
+            recent_changes = None
+
+        welcome_message = "👋 *Hey!*\n\n"
+
+        if recent_changes:
+            welcome_message += "*Recent updates:*\n"
+            for line in recent_changes.split('\n')[:2]:
+                parts = line.split(' ', 1)
+                if len(parts) == 2:
+                    welcome_message += f"• {parts[1]}\n"
+            welcome_message += "\n"
+
+        welcome_message += "Send me a message or /help to see what I can do!"
+
+        await query.edit_message_text(
+            welcome_message,
+            parse_mode="Markdown",
+            reply_markup=get_action_buttons()
+        )
+
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
@@ -769,6 +859,19 @@ def main():
 
     # Create application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Set bot commands (updates Telegram menu)
+    async def post_init(app: Application):
+        await app.bot.set_my_commands([
+            BotCommand("start", "Show welcome message"),
+            BotCommand("help", "Get help"),
+            BotCommand("status", "Check running tasks"),
+            BotCommand("clear", "Clear conversation"),
+            BotCommand("restart", "Restart the bot"),
+            BotCommand("cd", "Change workspace directory"),
+        ])
+
+    application.post_init = post_init
 
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
