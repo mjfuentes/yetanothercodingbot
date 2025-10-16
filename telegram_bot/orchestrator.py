@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from git_tracker import get_git_tracker
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,11 +58,23 @@ async def invoke_orchestrator(
     # Discover available repositories
     available_repos = discover_repositories(workspace_path)
 
+    # Check for uncommitted changes blocking work
+    git_tracker = get_git_tracker()
+
+    # Determine target repo from query or current workspace
+    target_repo = current_workspace or workspace_path
+
+    # Check if blocked by dirty repos
+    blocking_msg = git_tracker.get_blocking_message(target_repo)
+    if blocking_msg:
+        logger.info(f"Blocking work due to dirty repos")
+        return blocking_msg
+
     # Build context for orchestrator
     context = {
         "user_query": user_query,
         "input_method": input_method,
-        "conversation_history": conversation_history[-5:],  # Last 5 messages
+        "conversation_history": conversation_history[-3:],  # Last 3 messages (reduced context)
         "current_workspace": current_workspace or workspace_path,
         "available_repositories": available_repos,
         "bot_repository": bot_repository,
@@ -95,7 +109,7 @@ User query: {user_query}"""
         # The orchestrator agent will automatically be available from .claude/agents/
         cmd = [
             "claude", "chat",
-            "--model", "sonnet",
+            "--model", "sonnet",  # Better understanding than Haiku
             "--permission-mode", "bypassPermissions"  # Auto-approve write operations
         ]
 

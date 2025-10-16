@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -79,6 +80,20 @@ async def check_authorization(update: Update) -> bool:
     return True
 
 
+def get_action_buttons() -> InlineKeyboardMarkup:
+    """Create inline keyboard with quick action buttons"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🗑️ Clear Chat", callback_data="clear_conversation"),
+            InlineKeyboardButton("📊 Status", callback_data="show_status"),
+        ],
+        [
+            InlineKeyboardButton("📚 Help", callback_data="show_help"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     if not await check_authorization(update):
@@ -99,12 +114,17 @@ I'm your AI assistant powered by Claude Code. I can:
 /help - Get help
 /status - Check running tasks
 /clear - Clear conversation
+/restart - Restart the bot
 /cd - Change workspace directory
 
 Just send me a message to get started!
     """
 
-    await update.message.reply_text(welcome_message, parse_mode="Markdown")
+    await update.message.reply_text(
+        welcome_message,
+        parse_mode="Markdown",
+        reply_markup=get_action_buttons()
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,6 +204,35 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🗑️ Conversation cleared! Starting fresh."
     )
+
+
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /restart command - gracefully restart the bot"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+    logger.info(f"Restart requested by user {user_id}")
+
+    # Send acknowledgment
+    await update.message.reply_text(
+        "🔄 Restarting bot... Back in a moment."
+    )
+
+    # Schedule restart after response is sent
+    import signal
+    import sys
+
+    def restart_bot():
+        """Restart the bot process"""
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+
+    # Give time for message to send, then restart
+    await asyncio.sleep(1)
+
+    # Graceful shutdown then restart
+    restart_bot()
 
 
 async def cd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -428,15 +477,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"User {user_id} (text): {message_text}")
 
-    # Show typing indicator
-    await update.message.chat.send_action("typing")
+    # Send immediate acknowledgment
+    status_msg = await update.message.reply_text("⏳ Working on it...")
 
-    # Get conversation history
-    session = session_manager.get_session(user_id)
-    history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+    # Show typing indicator continuously in background
+    async def keep_typing():
+        try:
+            while True:
+                await update.message.chat.send_action("typing")
+                await asyncio.sleep(4)  # Typing indicator lasts ~5s
+        except:
+            pass
 
-    # Invoke orchestrator with text input
-    response = await invoke_orchestrator(
+    typing_task = asyncio.create_task(keep_typing())
+
+    try:
+        # Get conversation history
+        session = session_manager.get_session(user_id)
+        history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+        # Invoke orchestrator with text input
+        response = await invoke_orchestrator(
         user_query=message_text,
         input_method="text",
         conversation_history=history,
@@ -445,23 +506,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         workspace_path=WORKSPACE_PATH
     )
 
-    if not response:
-        # Fallback to direct Claude response
-        logger.warning("Orchestrator failed, using fallback")
-        response = await claude_client.send_message(user_id, message_text)
+        if not response:
+            # Fallback to direct Claude response
+            logger.warning("Orchestrator failed, using fallback")
+            response = await claude_client.send_message(user_id, message_text)
 
-    # Add to conversation history
-    session_manager.add_message(user_id, "user", message_text)
-    session_manager.add_message(user_id, "assistant", response)
+        # Add to conversation history
+        session_manager.add_message(user_id, "user", message_text)
+        session_manager.add_message(user_id, "assistant", response)
 
-    # Format and send response to user
-    formatted_chunks = format_telegram_response(
-        response,
-        workspace_path=session_manager.get_workspace(user_id)
-    )
+        # Delete status message
+        await status_msg.delete()
 
-    for chunk in formatted_chunks:
-        await update.message.reply_text(chunk, parse_mode="HTML")
+        # Format and send response to user
+        formatted_chunks = format_telegram_response(
+            response,
+            workspace_path=session_manager.get_workspace(user_id)
+        )
+
+        for chunk in formatted_chunks:
+            await update.message.reply_text(chunk, parse_mode="HTML")
+
+    finally:
+        # Stop typing indicator
+        typing_task.cancel()
 
 
 def transcribe_audio(file_path: str) -> Optional[str]:
@@ -521,12 +589,27 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(f"User {user_id} (voice): {transcription}")
 
-        # Get conversation history
-        session = session_manager.get_session(user_id)
-        history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+        # Send immediate acknowledgment
+        status_msg = await update.message.reply_text("⏳ Processing voice message...")
 
-        # Invoke orchestrator with VOICE input (be permissive with transcription errors)
-        response = await invoke_orchestrator(
+        # Show typing indicator continuously in background
+        async def keep_typing():
+            try:
+                while True:
+                    await update.message.chat.send_action("typing")
+                    await asyncio.sleep(4)
+            except:
+                pass
+
+        typing_task = asyncio.create_task(keep_typing())
+
+        try:
+            # Get conversation history
+            session = session_manager.get_session(user_id)
+            history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+            # Invoke orchestrator with VOICE input (be permissive with transcription errors)
+            response = await invoke_orchestrator(
             user_query=transcription,
             input_method="voice",  # Important: tells orchestrator to be permissive
             conversation_history=history,
@@ -535,28 +618,124 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             workspace_path=WORKSPACE_PATH
         )
 
-        if not response:
-            # Fallback to direct Claude response
-            logger.warning("Orchestrator failed, using fallback")
-            response = await claude_client.send_message(user_id, transcription)
+            if not response:
+                # Fallback to direct Claude response
+                logger.warning("Orchestrator failed, using fallback")
+                response = await claude_client.send_message(user_id, transcription)
 
-        # Add to conversation history
-        session_manager.add_message(user_id, "user", transcription)
-        session_manager.add_message(user_id, "assistant", response)
+            # Add to conversation history
+            session_manager.add_message(user_id, "user", transcription)
+            session_manager.add_message(user_id, "assistant", response)
 
-        # Format and send response to user (without showing transcription)
-        formatted_chunks = format_telegram_response(
-            response,
-            workspace_path=session_manager.get_workspace(user_id)
-        )
+            # Delete status message
+            await status_msg.delete()
 
-        for chunk in formatted_chunks:
-            await update.message.reply_text(chunk, parse_mode="HTML")
+            # Format and send response to user (without showing transcription)
+            formatted_chunks = format_telegram_response(
+                response,
+                workspace_path=session_manager.get_workspace(user_id)
+            )
+
+            for chunk in formatted_chunks:
+                await update.message.reply_text(chunk, parse_mode="HTML")
+
+        finally:
+            # Stop typing indicator
+            typing_task.cancel()
 
     except Exception as e:
         logger.error(f"Voice message handling error: {e}")
         await update.message.reply_text(
             "❌ Error processing voice message. Please try again."
+        )
+
+
+async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button clicks from inline keyboard"""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    # Answer callback to stop loading animation
+    await query.answer()
+
+    # Check authorization
+    if ALLOWED_USERS and user_id not in ALLOWED_USERS:
+        await query.edit_message_text("⛔ Unauthorized. Please contact the bot owner.")
+        return
+
+    callback_data = query.data
+
+    # Handle different button actions
+    if callback_data == "clear_conversation":
+        # Clear the session
+        session_manager.clear_session(user_id)
+        logger.info(f"Cleared session for user {user_id} via button")
+
+        await query.edit_message_text(
+            "🗑️ Conversation cleared! Starting fresh.\n\nSend me a message to begin.",
+            reply_markup=get_action_buttons()
+        )
+
+    elif callback_data == "show_status":
+        # Get session stats
+        stats = session_manager.get_session_stats(user_id)
+
+        if not stats['exists']:
+            await query.edit_message_text(
+                "📊 No active session. Send a message to start!",
+                reply_markup=get_action_buttons()
+            )
+            return
+
+        message = f"""📊 *Session Status*
+
+💬 Messages: {stats['message_count']}
+👤 User messages: {stats['user_messages']}
+🤖 Assistant messages: {stats['assistant_messages']}
+🕒 Created: {stats['created_at'][:19]}
+⏱️ Last activity: {stats['last_activity'][:19]}
+        """
+
+        await query.edit_message_text(
+            message,
+            parse_mode="Markdown",
+            reply_markup=get_action_buttons()
+        )
+
+    elif callback_data == "show_help":
+        help_text = """
+📚 *How to use me:*
+
+*Simple queries:*
+"What's 2+2?"
+"Explain async/await in Python"
+
+*Code generation:*
+"Build a REST API for user management"
+"Create a React component for a login form"
+
+*Multi-repository:*
+"in ~/myproject, create a new file"
+"for repository /workspace/app, fix bug"
+Or use: /cd /path/to/workspace
+
+*Research & Planning:*
+"Research best practices for WebSocket servers"
+"Plan a microservices architecture"
+
+*Commands:*
+/status - Check background tasks
+/clear - Reset conversation
+/cd - Change workspace directory
+/help - Show this message
+
+💡 Tip: I can handle complex multi-step tasks in the background!
+        """
+
+        await query.edit_message_text(
+            help_text,
+            parse_mode="Markdown",
+            reply_markup=get_action_buttons()
         )
 
 
@@ -596,7 +775,11 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("clear", clear_command))
+    application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("cd", cd_command))
+
+    # Handle button callbacks
+    application.add_handler(CallbackQueryHandler(button_callback_handler))
 
     # Handle messages
     application.add_handler(
