@@ -72,9 +72,11 @@ ROUTING DECISION:
 - BACKGROUND_TASK (needs file access - use exact format below):
   * Code analysis: "check code", "analyze codebase", "look for improvements", "review code", "scan for issues"
   * File inspection: "show me X file", "what's in Y", "read Z"
-  * Any coding work: "fix bug", "add feature", "edit file", "refactor", "create", "modify"
+  * ANY action verbs on code: "fix", "add", "edit", "refactor", "create", "modify", "update", "change", "implement"
   * Git operations: "commit", "push", "show diff", "git status"
   * Testing: "run tests", "check if X works"
+
+CRITICAL: If user says "fix X", "fix the X", "fix error", etc. → ALWAYS route to BACKGROUND_TASK, even if you've just discussed the error. Explaining ≠ Fixing.
 
 KEY: If the answer requires looking at actual project files → BACKGROUND_TASK. If it's general knowledge → answer directly.
 
@@ -87,13 +89,19 @@ When user says "check logs", "show logs", or "?":
 - Focus on actionable errors
 
 BACKGROUND_TASK FORMAT (for coding work):
-Return this EXACT format (pipe-delimited, single line, NO code blocks):
+Return this EXACT format (pipe-delimited, single line, NO code blocks, NO extra explanation):
 BACKGROUND_TASK|<task_description>|<user_message>
 
-IMPORTANT: Do NOT wrap in markdown code blocks (no ```). Return raw format only.
+IMPORTANT:
+- Do NOT wrap in markdown code blocks (no ```)
+- Do NOT add explanation before or after the BACKGROUND_TASK line
+- Return ONLY the BACKGROUND_TASK line, nothing else
+- The user_message will be shown immediately, so make it action-oriented
 
 Examples:
 - User: "fix bug in main.py" → BACKGROUND_TASK|Fix bug in main.py|Fixing the bug.
+- User: "fix the error" → BACKGROUND_TASK|Fix the error in the codebase|Fixing it.
+- User: "fix error" → BACKGROUND_TASK|Fix error in the codebase|Fixing it.
 - User: "check code for improvements" → BACKGROUND_TASK|Analyze codebase for improvements|Scanning the code.
 - User: "look at the logs" (with "logs" in query) → Answer directly with log analysis
 - User: "what is asyncio?" → Answer directly (general knowledge)
@@ -215,22 +223,36 @@ User query: {user_query}"""
 
         logger.info(f"Claude API response: {response_text[:100]}...")
 
-        # Check if response is BACKGROUND_TASK format (strip markdown code blocks if present)
-        cleaned_response = response_text
-        if response_text.startswith("```") and "\n" in response_text:
-            # Strip markdown code blocks: ```\nBACKGROUND_TASK|...\n```
+        # Check if response contains BACKGROUND_TASK anywhere (not just at start)
+        if "BACKGROUND_TASK|" in response_text:
+            # Find the line with BACKGROUND_TASK
             lines = response_text.split("\n")
-            if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
-                cleaned_response = "\n".join(lines[1:-1]).strip()
-            elif len(lines) >= 2 and lines[0].startswith("```"):
-                cleaned_response = "\n".join(lines[1:]).strip()
+            task_line = None
 
-        if cleaned_response.startswith("BACKGROUND_TASK|"):
-            parts = cleaned_response.split("|", 2)
-            if len(parts) == 3:
-                _, task_description, user_message = parts
-                background_task = {"description": task_description.strip(), "user_message": user_message.strip()}
-                return cleaned_response, background_task
+            for line in lines:
+                cleaned_line = line.strip()
+                # Strip markdown code blocks if present
+                if cleaned_line.startswith("```"):
+                    cleaned_line = cleaned_line[3:].strip()
+                if cleaned_line.endswith("```"):
+                    cleaned_line = cleaned_line[:-3].strip()
+
+                if cleaned_line.startswith("BACKGROUND_TASK|"):
+                    task_line = cleaned_line
+                    break
+
+            if task_line:
+                # Parse the BACKGROUND_TASK line
+                parts = task_line.split("|", 2)
+                if len(parts) == 3:
+                    _, task_description, user_message = parts
+                    background_task = {
+                        "description": task_description.strip(),
+                        "user_message": user_message.strip(),
+                    }
+
+                    # Return just the BACKGROUND_TASK line (we'll send task start message in main.py)
+                    return task_line, background_task
 
         # Direct answer
         return response_text, None
