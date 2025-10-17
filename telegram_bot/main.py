@@ -105,15 +105,15 @@ async def check_authorization(update: Update) -> bool:
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+    """Handle /start command - priority command that executes immediately"""
     if not await check_authorization(update):
         return
 
     user_id = update.effective_user.id
 
-    # Clear conversation history on /start
+    # Clear conversation history on /start (executes immediately, bypassing queue)
     session_manager.clear_session(user_id)
-    logger.info(f"Cleared session for user {user_id} via /start")
+    logger.info(f"Priority /start: Cleared session for user {user_id}")
 
     # Get recent changes
     try:
@@ -148,9 +148,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
+    """Handle /help command - priority command that executes immediately"""
     if not await check_authorization(update):
         return
+
+    logger.info(f"Priority /help: User {update.effective_user.id}")
 
     help_text = """
 *Commands*
@@ -279,15 +281,15 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /clear command"""
+    """Handle /clear command - priority command that executes immediately"""
     if not await check_authorization(update):
         return
 
     user_id = update.effective_user.id
 
-    # Clear the session
+    # Clear the session immediately (bypasses queue)
     session_manager.clear_session(user_id)
-    logger.info(f"Cleared session for user {user_id}")
+    logger.info(f"Priority /clear: Cleared session for user {user_id}")
 
     await update.message.reply_text(
         "Conversation cleared! Starting fresh."
@@ -302,25 +304,72 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Restart requested by user {user_id}")
 
-    # Send acknowledgment
-    await update.message.reply_text(
-        "Restarting bot... back in a moment."
-    )
+    # Send acknowledgment immediately
+    try:
+        await update.message.reply_text(
+            "Restarting bot... back in a moment."
+        )
+    except Exception as e:
+        logger.error(f"Failed to send restart acknowledgment: {e}")
 
-    # Schedule restart after response is sent
-    import signal
-    import sys
+    # Schedule graceful restart in background
+    async def graceful_restart():
+        """Gracefully restart the bot"""
+        try:
+            # Give message time to send
+            await asyncio.sleep(1)
 
-    def restart_bot():
-        """Restart the bot process"""
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
+            # Save current session state
+            logger.info("Saving session state before restart...")
+            # Sessions are already persistent in session_manager
 
-    # Give time for message to send, then restart
-    await asyncio.sleep(1)
+            # Cleanup queue manager gracefully
+            logger.info("Cleaning up message queues...")
+            await queue_manager.cleanup_all()
 
-    # Graceful shutdown then restart
-    restart_bot()
+            # Stop log monitor
+            logger.info("Stopping log monitor...")
+            await log_monitor_manager.stop()
+
+            # Give time for cleanup to complete
+            await asyncio.sleep(1)
+
+            # Restart the bot process
+            logger.info("Restarting bot process...")
+            import sys
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+
+        except Exception as e:
+            logger.error(f"Error during graceful restart: {e}")
+            # Try direct restart anyway
+            import sys
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+
+    # Schedule the restart task
+    asyncio.create_task(graceful_restart())
+
+
+def is_priority_command(message_text: str) -> bool:
+    """
+    Check if message is a priority command that should bypass the queue.
+    Priority commands: /restart, /start, /clear, /help
+
+    These need immediate execution even if bot is processing something.
+    """
+    if not message_text:
+        return False
+
+    text_lower = message_text.lower().strip()
+    priority_commands = [
+        '/restart', 'restart',
+        '/start', 'start',
+        '/clear', 'clear',
+        '/help', 'help'
+    ]
+
+    return any(text_lower == cmd or text_lower.startswith(cmd + ' ') for cmd in priority_commands)
 
 
 def extract_workspace_from_message(message: str) -> tuple[Optional[str], str]:
@@ -636,22 +685,42 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Queue text messages for sequential processing"""
+    """Queue text messages for sequential processing, with priority for commands"""
     if not await check_authorization(update):
         return
 
     user_id = update.effective_user.id
+    message_text = update.message.text or ""
 
-    # Send immediate acknowledgment before queueing
-    await update.message.reply_text("Working on it...")
+    # Check if this is a priority command (should not normally happen since
+    # CommandHandler catches /start, /clear, etc., but good defensive check)
+    if is_priority_command(message_text):
+        logger.info(f"Priority text command detected: {message_text[:50]}")
+        # Queue with high priority
+        await queue_manager.enqueue_message(
+            user_id=user_id,
+            update=update,
+            context=context,
+            handler=_handle_message_impl,
+            handler_name="priority_text_command",
+            priority=10
+        )
+    else:
+        # Send immediate acknowledgment before queueing normal messages
+        try:
+            await update.message.reply_text("Working on it...")
+        except:
+            pass  # Message may have been processed already
 
-    await queue_manager.enqueue_message(
-        user_id=user_id,
-        update=update,
-        context=context,
-        handler=_handle_message_impl,
-        handler_name="text_message"
-    )
+        # Queue with normal priority
+        await queue_manager.enqueue_message(
+            user_id=user_id,
+            update=update,
+            context=context,
+            handler=_handle_message_impl,
+            handler_name="text_message",
+            priority=0
+        )
 
 
 def transcribe_audio(file_path: str) -> Optional[str]:

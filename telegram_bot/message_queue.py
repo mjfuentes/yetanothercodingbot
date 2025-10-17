@@ -21,6 +21,7 @@ class QueuedMessage:
     handler: Callable  # Handler function (handle_message, handle_document, etc)
     queued_at: datetime
     handler_name: str = "unknown"  # For logging
+    priority: int = 0  # 0 = normal, 1+ = higher priority (higher number = higher priority)
 
     async def execute(self) -> None:
         """Execute the handler for this message"""
@@ -36,15 +37,23 @@ class UserMessageQueue:
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.queue: asyncio.Queue[QueuedMessage] = asyncio.Queue()
+        self.priority_queue: list[QueuedMessage] = []  # Messages waiting for priority
         self.processing = False
         self.current_message: QueuedMessage | None = None
         self.messages_processed = 0
         self.processor_task: asyncio.Task | None = None
 
     async def enqueue(self, message: QueuedMessage) -> None:
-        """Add a message to the queue"""
-        await self.queue.put(message)
-        logger.debug(f"User {self.user_id}: Message queued ({self.queue.qsize()} in queue)")
+        """Add a message to the queue, prioritizing high-priority messages"""
+        if message.priority > 0:
+            # High priority message - add to priority list and trigger immediate processing
+            self.priority_queue.append(message)
+            self.priority_queue.sort(key=lambda m: m.priority, reverse=True)
+            logger.info(f"User {self.user_id}: Priority message queued: {message.handler_name} (priority={message.priority})")
+        else:
+            # Normal priority message
+            await self.queue.put(message)
+            logger.debug(f"User {self.user_id}: Message queued ({self.queue.qsize()} in queue)")
 
         # Start processor if not already running
         if not self.processing:
@@ -62,21 +71,30 @@ class UserMessageQueue:
         self.processor_task = asyncio.create_task(self._process_queue())
 
     async def _process_queue(self) -> None:
-        """Process queued messages sequentially"""
+        """Process queued messages sequentially, prioritizing high-priority messages"""
         try:
             while True:
                 try:
-                    # Wait for next message with timeout to allow graceful shutdown
-                    self.current_message = await asyncio.wait_for(
-                        self.queue.get(),
-                        timeout=300  # 5 minute timeout per message
-                    )
+                    # Check for priority messages first
+                    if self.priority_queue:
+                        self.current_message = self.priority_queue.pop(0)
+                        wait_time = (datetime.now() - self.current_message.queued_at).total_seconds()
+                        logger.info(
+                            f"User {self.user_id}: Processing PRIORITY {self.current_message.handler_name} "
+                            f"(waited {wait_time:.1f}s, priority={self.current_message.priority})"
+                        )
+                    else:
+                        # Wait for next normal priority message with timeout
+                        self.current_message = await asyncio.wait_for(
+                            self.queue.get(),
+                            timeout=300  # 5 minute timeout per message
+                        )
 
-                    wait_time = (datetime.now() - self.current_message.queued_at).total_seconds()
-                    logger.info(
-                        f"User {self.user_id}: Processing {self.current_message.handler_name} "
-                        f"(waited {wait_time:.1f}s, {self.queue.qsize()} remaining)"
-                    )
+                        wait_time = (datetime.now() - self.current_message.queued_at).total_seconds()
+                        logger.info(
+                            f"User {self.user_id}: Processing {self.current_message.handler_name} "
+                            f"(waited {wait_time:.1f}s, {self.queue.qsize()} remaining)"
+                        )
 
                     # Execute handler
                     await self.current_message.execute()
@@ -132,9 +150,19 @@ class MessageQueueManager:
         update: Any,
         context: Any,
         handler: Callable,
-        handler_name: str = "unknown"
+        handler_name: str = "unknown",
+        priority: int = 0
     ) -> None:
-        """Queue a message for a user"""
+        """Queue a message for a user
+
+        Args:
+            user_id: The user ID
+            update: Telegram Update object
+            context: Telegram Context object
+            handler: Handler function to execute
+            handler_name: Name of handler for logging
+            priority: Message priority (0=normal, higher=priority commands like restart/start/clear)
+        """
         async with self._lock:
             # Create queue for user if doesn't exist
             if user_id not in self.user_queues:
@@ -148,7 +176,8 @@ class MessageQueueManager:
             context=context,
             handler=handler,
             queued_at=datetime.now(),
-            handler_name=handler_name
+            handler_name=handler_name,
+            priority=priority
         )
 
         await self.user_queues[user_id].enqueue(message)
