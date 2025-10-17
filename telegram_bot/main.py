@@ -1482,6 +1482,11 @@ def main():
         if original_post_init:
             await original_post_init(app)
 
+        # Start worker pool FIRST - before any operations that might need it
+        logger.info("Starting background worker pool...")
+        await worker_pool.start()
+        logger.info(f"Worker pool started with {worker_pool.max_workers} workers")
+
         # Check for restart state and notify user
         import json
         from pathlib import Path
@@ -1569,11 +1574,6 @@ def main():
                         logger.info("Cleaned up restart state file after error")
                 except Exception as cleanup_error:
                     logger.error(f"Failed to clean up restart state file: {cleanup_error}")
-
-        # Start worker pool for background task execution
-        logger.info("Starting background worker pool...")
-        await worker_pool.start()
-        logger.info(f"Worker pool started with {worker_pool.max_workers} workers")
 
         # Start log monitoring - DISABLED
         # await start_log_monitor(app)
