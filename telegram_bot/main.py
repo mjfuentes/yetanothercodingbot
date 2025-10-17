@@ -40,7 +40,6 @@ try:
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
-    logging.warning("Whisper not installed. Voice transcription will be limited.")
 
 # Load environment variables
 load_dotenv()
@@ -53,20 +52,25 @@ WORKSPACE_PATH = os.getenv("WORKSPACE_PATH", os.getcwd())
 BOT_REPOSITORY = os.getenv("BOT_REPOSITORY", os.getcwd())
 SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
 
-# Setup logging
+# Setup logging (BEFORE any log calls to avoid duplicate handlers)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
     handlers=[
         logging.FileHandler("logs/bot.log"),
         logging.StreamHandler()
-    ]
+    ],
+    force=True  # Replace any existing handlers
 )
 logger = logging.getLogger(__name__)
 
 # Reduce HTTP/Telegram noise in logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
+
+# Log whisper availability after logging is configured
+if not WHISPER_AVAILABLE:
+    logger.warning("Whisper not installed. Voice transcription will be limited.")
 
 # Global managers
 session_manager = SessionManager(timeout_minutes=SESSION_TIMEOUT_MINUTES)
