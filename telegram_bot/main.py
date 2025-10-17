@@ -593,7 +593,7 @@ async def show_task_status(user_id: int, update: Update):
     )
 
 
-async def process_message_async(user_id: int, message_text: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_message_async(user_id: int, message_text: str, update: Update, context: ContextTypes.DEFAULT_TYPE, ack_message_id: Optional[int] = None):
     """Process message asynchronously in background"""
     try:
         # Get conversation history
@@ -610,6 +610,13 @@ async def process_message_async(user_id: int, message_text: str, update: Update,
             workspace_path=WORKSPACE_PATH,
             task_manager=task_manager
         )
+
+        # Delete acknowledgment message if it exists
+        if ack_message_id:
+            try:
+                await context.bot.delete_message(chat_id=user_id, message_id=ack_message_id)
+            except Exception as e:
+                logger.debug(f"Could not delete acknowledgment message: {e}")
 
         if not response:
             # Fallback to direct Claude response
@@ -698,9 +705,13 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
     if warning_msg:
         await update.message.reply_text(warning_msg)
 
+    # Send acknowledgment message
+    ack_message = await update.message.reply_text("⏳")
+    ack_message_id = ack_message.message_id
+
     # Launch background task for orchestrator processing (no await)
     # This allows the function to return immediately while work happens async
-    asyncio.create_task(process_message_async(user_id, message_text, update, context))
+    asyncio.create_task(process_message_async(user_id, message_text, update, context, ack_message_id))
 
     logger.info(f"Queued async processing for user {user_id}: {message_text[:60]}...")
 
@@ -1030,7 +1041,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def process_voice_async(user_id: int, transcription: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_voice_async(user_id: int, transcription: str, update: Update, context: ContextTypes.DEFAULT_TYPE, ack_message_id: Optional[int] = None):
     """Process voice message asynchronously in background"""
     try:
         # Get conversation history
@@ -1047,6 +1058,13 @@ async def process_voice_async(user_id: int, transcription: str, update: Update, 
             workspace_path=WORKSPACE_PATH,
             task_manager=task_manager
         )
+
+        # Delete acknowledgment message if it exists
+        if ack_message_id:
+            try:
+                await context.bot.delete_message(chat_id=user_id, message_id=ack_message_id)
+            except Exception as e:
+                logger.debug(f"Could not delete acknowledgment message: {e}")
 
         if not response:
             logger.warning("Orchestrator returned empty response (voice handler), using fallback")
@@ -1133,8 +1151,12 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         logger.info(f"User {user_id} (voice): {transcription}")
 
+        # Send acknowledgment message
+        ack_message = await update.message.reply_text("⏳")
+        ack_message_id = ack_message.message_id
+
         # Launch background task for processing (no await)
-        asyncio.create_task(process_voice_async(user_id, transcription, update, context))
+        asyncio.create_task(process_voice_async(user_id, transcription, update, context, ack_message_id))
 
         logger.info(f"Queued async processing for voice from user {user_id}")
 
