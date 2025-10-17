@@ -199,6 +199,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /status - Active tasks & errors
 /usage - Detailed API costs
 /retry - Retry failed tasks
+/stop - Stop a running task
 /start - Fresh conversation
 /clear - Reset history
 /clear errors - Clear all failed tasks
@@ -408,6 +409,60 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "Example: /retry " + failed_tasks[0].task_id
 
         await send_formatted_response(context, user_id, message)
+
+
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stop command - stop a running task"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+
+    # Check if task ID was provided
+    if not context.args or len(context.args) == 0:
+        # No task ID provided - show usage
+        active_tasks = task_manager.get_active_tasks(user_id)
+
+        if not active_tasks:
+            await update.message.reply_text("No active tasks to stop.")
+            return
+
+        message = "Active Tasks\n\n"
+        message += "Use /stop <task_id> to stop a specific task\n\n"
+
+        for task in active_tasks[:5]:  # Show up to 5 active tasks
+            status_icon = "🔄" if task.status == "pending" else "▶️"
+            message += f"{status_icon} #{task.task_id} - {task.description[:50]}\n"
+
+        if len(active_tasks) > 5:
+            message += f"\n... and {len(active_tasks) - 5} more"
+
+        message += f"\n\nExample: /stop {active_tasks[0].task_id}"
+
+        await send_formatted_response(context, user_id, message)
+        return
+
+    # Stop specific task
+    task_id = context.args[0].lstrip("#")  # Remove # if present
+
+    # Check if task exists and belongs to user
+    task = task_manager.get_task(task_id)
+    if not task:
+        message = f"Task #{task_id} not found."
+        await send_formatted_response(context, user_id, message)
+        return
+
+    if task.user_id != user_id:
+        await update.message.reply_text("You don't have permission to stop this task.")
+        return
+
+    # Stop the task
+    success, message = task_manager.stop_task(task_id)
+
+    if success:
+        message = f"Task Stopped #{task_id}\n\n{task.description}\n\nYou can retry it later with /retry {task_id}"
+
+    await send_formatted_response(context, user_id, message)
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1419,6 +1474,7 @@ def main():
                 BotCommand("status", "Active tasks & errors"),
                 BotCommand("usage", "Show detailed API usage & costs"),
                 BotCommand("retry", "Retry failed tasks"),
+                BotCommand("stop", "Stop a running task"),
                 BotCommand("clear", "Clear conversation"),
                 BotCommand("restart", "Restart the bot"),
             ]
@@ -1591,6 +1647,7 @@ def main():
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("retry", retry_command))
+    application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("restart", restart_command))
 

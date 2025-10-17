@@ -308,6 +308,42 @@ class TaskManager:
 
         return stopped_tasks[:limit]
 
+    def stop_task(self, task_id: str) -> tuple[bool, str]:
+        """
+        Stop a running task by killing its process.
+
+        Args:
+            task_id: Task ID to stop
+
+        Returns:
+            (success, message) tuple
+        """
+        task = self.tasks.get(task_id)
+
+        if not task:
+            return False, f"Task #{task_id} not found."
+
+        if task.status not in ["pending", "in_progress"]:
+            return False, f"Task #{task_id} is not running (status: {task.status})."
+
+        # Try to kill the process if we have a PID
+        if task.pid and is_process_alive(task.pid):
+            try:
+                os.kill(task.pid, 9)  # SIGKILL - forcefully terminate
+                logger.info(f"Killed process {task.pid} for task {task_id}")
+            except OSError as e:
+                logger.error(f"Failed to kill process {task.pid}: {e}")
+                return False, f"Failed to stop task #{task_id}: {e}"
+
+        # Update task status
+        task.status = "stopped"
+        task.error = "Task stopped by user"
+        task.updated_at = datetime.now().isoformat()
+        self._save_tasks()
+
+        logger.info(f"Stopped task {task_id} (was {task.status})")
+        return True, f"Task #{task_id} stopped successfully."
+
     def retry_all_stopped_tasks(self) -> list[Task]:
         """
         Retry all stopped tasks on startup.
