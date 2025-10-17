@@ -196,7 +196,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = """
 <b>Commands</b>
-/status - Active tasks, API usage, errors
+/status - Active tasks & errors
 /usage - Detailed API costs
 /retry - Retry failed tasks
 /start - Fresh conversation
@@ -223,7 +223,7 @@ Use /usage to check spending
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /status command - show active tasks, API usage, and errors in compact format"""
+    """Handle /status command - show active tasks and errors in compact format"""
     if not await check_authorization(update):
         return
 
@@ -239,9 +239,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recent_tasks = task_manager.get_user_tasks(user_id, limit=10)
     failed_tasks = [t for t in recent_tasks if t.status == "failed"][:3]
 
-    # Cost tracking
-    usage_stats = cost_tracker.get_usage_stats(user_id)
-
     # Build compact status message (plain text - formatter will convert to HTML)
     message_parts = ["Status\n"]
 
@@ -252,44 +249,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_icon = "🔄" if task.status == "pending" else "▶️"
             message_parts.append(f"{status_icon} #{task.task_id} {task.description[:50]}")
         message_parts.append("")
-
-    # API Usage - compact format with session and weekly
-    message_parts.append("API Usage")
-
-    # Session usage (if available)
-    if usage_stats.get("session_cost", 0) > 0:
-        session_info = f"Session ({usage_stats.get('session_duration', '0m')}): ${usage_stats['session_cost']:.2f}"
-        message_parts.append(session_info)
-
-    # Weekly usage
-    weekly_cost = usage_stats.get("weekly_cost", 0)
-    if weekly_cost > 0:
-        message_parts.append(f"Week: ${weekly_cost:.2f}")
-
-    # Daily and monthly with percentages
-    daily_pct = (usage_stats["daily_cost"] / usage_stats["daily_limit"] * 100) if usage_stats["daily_limit"] > 0 else 0
-    monthly_pct = (
-        (usage_stats["monthly_cost"] / usage_stats["monthly_limit"] * 100) if usage_stats["monthly_limit"] > 0 else 0
-    )
-
-    message_parts.append(
-        f"Day: ${usage_stats['daily_cost']:.2f} / ${usage_stats['daily_limit']:.2f} ({daily_pct:.0f}%)"
-    )
-    message_parts.append(
-        f"Month: ${usage_stats['monthly_cost']:.2f} / ${usage_stats['monthly_limit']:.2f} ({monthly_pct:.0f}%)"
-    )
-
-    # Add warnings if approaching limits
-    warnings = []
-    if daily_pct >= 80:
-        warnings.append(f"⚠️ Daily limit at {daily_pct:.0f}%")
-    if monthly_pct >= 80:
-        warnings.append(f"⚠️ Monthly limit at {monthly_pct:.0f}%")
-
-    if warnings:
-        message_parts.append("\n".join(warnings))
-
-    message_parts.append(f"Requests: {usage_stats['total_requests']} | Total: ${usage_stats['total_cost']:.2f}")
 
     # Failed tasks - only show if there are any
     if failed_tasks:
@@ -420,8 +379,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message = f"Task Retry Started #{new_task.task_id}\n\n"
             message += f"Retrying: {task.description}\n"
             message += f"Original: #{task_id}\n"
-            message += f"Previous error: {task.error[:80] if task.error else 'Unknown'}\n\n"
-            message += "I'll notify you when it's complete!"
+            message += f"Previous error: {task.error[:80] if task.error else 'Unknown'}"
 
             await send_formatted_response(context, user_id, message)
         else:
@@ -825,9 +783,7 @@ async def process_message_async(
             await worker_pool.submit(execute_code_task, task, update, context)
 
             # Send user-facing message
-            response = (
-                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
-            )
+            response = f"Task #{task.task_id} started.\n\n{user_message}"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -995,9 +951,7 @@ async def process_document_async(
             task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
             logger.info(f"Submitted task {task.task_id} to worker pool (document)")
             await worker_pool.submit(execute_code_task, task, update, context)
-            response = (
-                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
-            )
+            response = f"Task #{task.task_id} started.\n\n{user_message}"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -1142,9 +1096,7 @@ async def process_photo_async(
             task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
             logger.info(f"Submitted task {task.task_id} to worker pool (photo)")
             await worker_pool.submit(execute_code_task, task, update, context)
-            response = (
-                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
-            )
+            response = f"Task #{task.task_id} started.\n\n{user_message}"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -1281,9 +1233,7 @@ async def process_voice_async(
             task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
             logger.info(f"Submitted task {task.task_id} to worker pool (voice)")
             await worker_pool.submit(execute_code_task, task, update, context)
-            response = (
-                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
-            )
+            response = f"Task #{task.task_id} started.\n\n{user_message}"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", transcription)
@@ -1466,7 +1416,7 @@ def main():
             [
                 BotCommand("start", "Start fresh (clears history)"),
                 BotCommand("help", "Get help"),
-                BotCommand("status", "Active tasks, API usage & errors"),
+                BotCommand("status", "Active tasks & errors"),
                 BotCommand("usage", "Show detailed API usage & costs"),
                 BotCommand("retry", "Retry failed tasks"),
                 BotCommand("clear", "Clear conversation"),
