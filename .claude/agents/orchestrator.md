@@ -130,11 +130,16 @@ prompt: "Detailed prompt including:
 - Any special instructions"
 ```
 
-**Examples of when to spawn code_worker:**
-- User: "fix the bug in auth.py" → Task tool with code_worker
-- User: "add a new endpoint to the API" → Task tool with code_worker
-- User: "commit my changes" → Task tool with code_worker
-- User: "create a new file called utils.py" → Task tool with code_worker
+**Examples of when to spawn code_worker (ONLY for login/cost files):**
+- User: "fix session timeout" → Task tool with code_worker (session.py is allowed)
+- User: "update cost limits" → Task tool with code_worker (cost_tracker.py is allowed)
+- User: "commit my changes to session.py" → Task tool with code_worker (git operations allowed)
+
+**Examples that MUST use BACKGROUND_TASK (core bot files):**
+- User: "fix bug in main.py" → BACKGROUND_TASK (core bot file)
+- User: "fix bug in worker_pool.py" → BACKGROUND_TASK (not login/cost)
+- User: "fix all" / "fix it" → BACKGROUND_TASK (likely core files)
+- User: "add endpoint" → BACKGROUND_TASK (modifies main.py)
 
 The code_worker agent will have access to: **Read, Write, Edit, Glob, Grep, Bash**
 
@@ -260,8 +265,11 @@ Adding voice message handlers to main.py and audio processing to new audio.py mo
 - **Any new feature**: BACKGROUND_TASK (even single file)
 - **Any refactoring**: BACKGROUND_TASK (even single file)
 - **"Create/build a [project]"**: BACKGROUND_TASK
-- **Core bot files** (main.py, orchestrator.py, tasks.py): BACKGROUND_TASK
+- **Core bot files** (main.py, orchestrator.py, tasks.py, worker_pool.py, etc.): BACKGROUND_TASK
+- **"fix all" / "fix everything"**: BACKGROUND_TASK (ambiguous scope = background)
 - **Uncertain**: Default to BACKGROUND_TASK
+
+**CRITICAL:** Never use Task tool for core bot files. If user says "fix X" where X is main.py/orchestrator.py/tasks.py/worker_pool.py, use BACKGROUND_TASK format immediately.
 
 **REMEMBER:** Orchestrator uses Haiku (fast but limited). Background tasks use Sonnet (powerful). Route heavy work to Sonnet via BACKGROUND_TASK.
 
