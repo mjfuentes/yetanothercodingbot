@@ -92,6 +92,25 @@ log_escalation = LogClaudeEscalation(BOT_REPOSITORY)
 user_confirmations = UserConfirmationManager()
 
 
+# Async wrapper functions for delegating writes to worker pool
+async def _async_add_session_message(user_id: int, role: str, content: str):
+    """Async wrapper for session write - queued to worker pool"""
+    session_manager.add_message(user_id, role, content)
+    logger.debug(f"Queued session write: user {user_id}, role {role}")
+
+
+async def _async_record_usage(user_id: int, model: str, input_tokens: int, output_tokens: int, request_type: str):
+    """Async wrapper for cost tracking write - queued to worker pool"""
+    cost_tracker.record_usage(
+        user_id=user_id,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        request_type=request_type
+    )
+    logger.debug(f"Queued cost tracking: user {user_id}, model {model}")
+
+
 async def check_authorization(update: Update) -> bool:
     """Check if user is authorized"""
     user_id = update.effective_user.id
@@ -618,20 +637,14 @@ async def process_message_async(user_id: int, message_text: str, update: Update,
                 # Send user-facing message
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
-        # Add to conversation history
-        session_manager.add_message(user_id, "user", message_text)
-        session_manager.add_message(user_id, "assistant", response)
+        # Queue session writes to worker pool (non-blocking)
+        await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
+        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
-        # Record API usage (estimate tokens)
+        # Queue cost tracking to worker pool (non-blocking)
         input_tokens = cost_tracker.estimate_tokens(message_text)
         output_tokens = cost_tracker.estimate_tokens(response)
-        cost_tracker.record_usage(
-            user_id=user_id,
-            model="haiku",  # Default model for orchestrator
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            request_type="chat"
-        )
+        await worker_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
 
         # Format and send response to user
         formatted_chunks = format_telegram_response(
@@ -784,9 +797,9 @@ async def process_document_async(user_id: int, message_text: str, tmp_path: str,
                 await worker_pool.submit(execute_code_task, task, update, context)
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
-        # Add to conversation history
-        session_manager.add_message(user_id, "user", message_text)
-        session_manager.add_message(user_id, "assistant", response)
+        # Queue session writes to worker pool (non-blocking)
+        await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
+        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user
         formatted_chunks = format_telegram_response(
@@ -932,9 +945,9 @@ async def process_photo_async(user_id: int, message_text: str, tmp_path: str, up
                 await worker_pool.submit(execute_code_task, task, update, context)
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
-        # Add to conversation history
-        session_manager.add_message(user_id, "user", message_text)
-        session_manager.add_message(user_id, "assistant", response)
+        # Queue session writes to worker pool (non-blocking)
+        await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
+        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user
         formatted_chunks = format_telegram_response(
@@ -1059,9 +1072,9 @@ async def process_voice_async(user_id: int, transcription: str, update: Update, 
                 await worker_pool.submit(execute_code_task, task, update, context)
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
-        # Add to conversation history
-        session_manager.add_message(user_id, "user", transcription)
-        session_manager.add_message(user_id, "assistant", response)
+        # Queue session writes to worker pool (non-blocking)
+        await worker_pool.submit(_async_add_session_message, user_id, "user", transcription)
+        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user
         formatted_chunks = format_telegram_response(
