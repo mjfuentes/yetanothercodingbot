@@ -45,7 +45,6 @@ ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USERS", "").split(",") i
 CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "claude")
 WORKSPACE_PATH = os.getenv("WORKSPACE_PATH", os.getcwd())
 BOT_REPOSITORY = os.getenv("BOT_REPOSITORY", os.getcwd())
-SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
 
 # Setup logging (BEFORE any log calls to avoid duplicate handlers)
 logging.basicConfig(
@@ -69,7 +68,7 @@ if not WHISPER_AVAILABLE:
     logger.warning("Whisper not installed. Voice transcription will be limited.")
 
 # Global managers
-session_manager = SessionManager(timeout_minutes=SESSION_TIMEOUT_MINUTES)
+session_manager = SessionManager()
 claude_client = ClaudeCodeSession(CLAUDE_CLI_PATH, WORKSPACE_PATH, session_manager)
 task_manager = TaskManager()
 claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
@@ -167,9 +166,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Get recent changes
     try:
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-3"], cwd=BOT_REPOSITORY, capture_output=True, text=True, timeout=2
-        )
+        result = subprocess.run(["git", "log", "--oneline", "-3"], cwd=BOT_REPOSITORY, capture_output=True, text=True)
         recent_changes = result.stdout.strip() if result.returncode == 0 else None
     except Exception:
         recent_changes = None
@@ -634,25 +631,56 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             task_manager.update_task(task.task_id, status="completed", result=result)
             logger.info(f"Task {task.task_id} completed successfully")
 
-            # Notify user
-            notification = f"Task Complete #{task.task_id}\n\n{task.description}\n\n{result}"
+            # Notify user with minimal inline message + MD attachment
+            notification = f"Task Complete #{task.task_id}\n\n{task.description}\n\n📄 Full response attached..."
+            full_response = f"{task.description}\n\n{result}"
         else:
             task_manager.update_task(task.task_id, status="failed", error=result)
             logger.error(f"Task {task.task_id} failed: {result}")
 
-            # Notify user of failure
-            notification = f"Task Failed #{task.task_id}\n\n{task.description}\n\n{result}"
+            # Notify user of failure with minimal inline message + MD attachment
+            notification = f"Task Failed #{task.task_id}\n\n{task.description}\n\n📄 Error details attached..."
+            full_response = f"{task.description}\n\n{result}"
 
-        # Format and send notification using send_formatted_response helper
+        # Send minimal inline notification
         await send_formatted_response(context, user_id, notification)
+
+        # Send full result as markdown document attachment
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, prefix=f"task_{task.task_id}_") as tmp:
+            tmp.write(full_response)
+            tmp_path = tmp.name
+
+        try:
+            with open(tmp_path, "rb") as doc:
+                await context.bot.send_document(
+                    chat_id=user_id, document=doc, filename=f"task_{task.task_id}_result.md"
+                )
+        finally:
+            # Clean up temporary file
+            Path(tmp_path).unlink(missing_ok=True)
 
     except Exception as e:
         logger.error(f"Task execution error for {task.task_id}: {e}")
         task_manager.update_task(task.task_id, status="failed", error=str(e))
 
-        # Notify user using send_formatted_response helper
-        message = f"Task Failed #{task.task_id}\n\n{task.description}\n\nUnexpected error: {str(e)}"
-        await send_formatted_response(context, user_id, message)
+        # Notify user with minimal inline message + MD attachment
+        notification = f"Task Failed #{task.task_id}\n\n{task.description}\n\n📄 Error details attached..."
+        full_response = f"{task.description}\n\nUnexpected error: {str(e)}"
+
+        # Send minimal inline notification
+        await send_formatted_response(context, user_id, notification)
+
+        # Send error details as markdown document attachment
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, prefix=f"task_{task.task_id}_") as tmp:
+            tmp.write(full_response)
+            tmp_path = tmp.name
+
+        try:
+            with open(tmp_path, "rb") as doc:
+                await context.bot.send_document(chat_id=user_id, document=doc, filename=f"task_{task.task_id}_error.md")
+        finally:
+            # Clean up temporary file
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 async def show_task_status(user_id: int, update: Update):
