@@ -211,7 +211,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if active_tasks:
         message_parts.append(f"Active Tasks ({len(active_tasks)})")
         for task in active_tasks[:5]:  # Show up to 5 active tasks
-            status_icon = "⏳" if task.status == "pending" else "▶️"
+            status_icon = "🔄" if task.status == "pending" else "▶️"
             message_parts.append(f"{status_icon} #{task.task_id} {task.description[:50]}")
         message_parts.append("")
 
@@ -284,15 +284,15 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get rate limit stats
     rate_stats = rate_limiter.get_user_stats(user_id)
 
-    # Build detailed message
-    message = f"""*API Usage & Costs*
+    # Build detailed message (plain text - formatter will convert to HTML)
+    message = f"""API Usage & Costs
 
-*Total Usage*
+Total Usage
 • Total requests: {cost_stats['total_requests']}
 • Total cost: ${cost_stats['total_cost']:.4f}
 • Recent (24h): {cost_stats['recent_24h']} requests
 
-*Current Session*"""
+Current Session"""
 
     # Add session info if available
     if cost_stats.get("session_cost", 0) > 0:
@@ -302,12 +302,12 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     message += f"""
 
-*Current Period*
+Current Period
 • Weekly: ${cost_stats.get('weekly_cost', 0):.4f}
 • Daily: ${cost_stats['daily_cost']:.4f} / ${cost_stats['daily_limit']:.2f} ({cost_stats['daily_percentage']:.1f}%)
 • Monthly: ${cost_stats['monthly_cost']:.4f} / ${cost_stats['monthly_limit']:.2f} ({cost_stats['monthly_percentage']:.1f}%)
 
-*Rate Limits*
+Rate Limits
 • Last minute: {rate_stats['requests_last_minute']} / {rate_stats['limit_per_minute']} ({rate_stats['minute_percentage']:.0f}%)
 • Last hour: {rate_stats['requests_last_hour']} / {rate_stats['limit_per_hour']} ({rate_stats['hour_percentage']:.0f}%)"""
 
@@ -316,13 +316,16 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Add model breakdown if available
     if cost_stats["model_breakdown"]:
-        message += "\n\n*By Model*\n"
+        message += "\n\nBy Model\n"
         for model, stats in cost_stats["model_breakdown"].items():
             message += f"• {model}: {stats['requests']} requests (${stats['cost']:.4f})\n"
 
     message += f"\n\nLast reset: {cost_stats['last_reset'][:19]}"
 
-    await update.message.reply_text(message, parse_mode="Markdown")
+    # Format and send using HTML formatter
+    formatted_chunks = format_telegram_response(message, max_length=4000)
+    for chunk in formatted_chunks:
+        await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
 
 async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -340,7 +343,10 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check if task exists and belongs to user
         task = task_manager.get_task(task_id)
         if not task:
-            await update.message.reply_text(f"Task `#{task_id}` not found.", parse_mode="Markdown")
+            message = f"Task #{task_id} not found."
+            formatted_chunks = format_telegram_response(message, max_length=4000)
+            for chunk in formatted_chunks:
+                await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
             return
 
         if task.user_id != user_id:
@@ -348,9 +354,10 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if task.status != "failed":
-            await update.message.reply_text(
-                f"Task `#{task_id}` is not failed (status: {task.status}).", parse_mode="Markdown"
-            )
+            message = f"Task #{task_id} is not failed (status: {task.status})."
+            formatted_chunks = format_telegram_response(message, max_length=4000)
+            for chunk in formatted_chunks:
+                await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
             return
 
         # Retry the task
@@ -359,13 +366,15 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Submit task to worker pool
             await worker_pool.submit(execute_code_task, new_task, update, context)
 
-            message = f"*Task Retry Started* (#{new_task.task_id})\n\n"
+            message = f"Task Retry Started (#{new_task.task_id})\n\n"
             message += f"Retrying: {task.description}\n\n"
-            message += f"Original task: `#{task_id}`\n"
+            message += f"Original task: #{task_id}\n"
             message += f"Error was: {task.error[:100] if task.error else 'Unknown'}\n\n"
             message += "I'll notify you when it's complete!"
 
-            await update.message.reply_text(message, parse_mode="Markdown")
+            formatted_chunks = format_telegram_response(message, max_length=4000)
+            for chunk in formatted_chunks:
+                await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
         else:
             await update.message.reply_text("Failed to retry task. Please try again.")
 
@@ -377,21 +386,23 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No failed tasks to retry! 🎉")
             return
 
-        message = "*Failed Tasks*\n\n"
+        message = "Failed Tasks\n\n"
         message += f"Found {len(failed_tasks)} failed task(s):\n\n"
 
         for task in failed_tasks[:5]:  # Show up to 5
             error_preview = task.error[:60] if task.error else "Unknown error"
-            message += f"❌ `#{task.task_id}` - {task.description[:50]}\n"
+            message += f"❌ #{task.task_id} - {task.description[:50]}\n"
             message += f"   Error: {error_preview}\n\n"
 
         if len(failed_tasks) > 5:
             message += f"... and {len(failed_tasks) - 5} more\n\n"
 
-        message += "\nUse `/retry <task_id>` to retry a specific task\n"
-        message += "Example: `/retry " + failed_tasks[0].task_id + "`"
+        message += "\nUse /retry <task_id> to retry a specific task\n"
+        message += "Example: /retry " + failed_tasks[0].task_id
 
-        await update.message.reply_text(message, parse_mode="Markdown")
+        formatted_chunks = format_telegram_response(message, max_length=4000)
+        for chunk in formatted_chunks:
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -420,7 +431,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send acknowledgment immediately
     restart_msg = None
     try:
-        restart_msg = await update.message.reply_text("⏳ Restarting...")
+        restart_msg = await update.message.reply_text("🔄 Restarting...")
     except Exception as e:
         logger.error(f"Failed to send restart acknowledgment: {e}")
 
@@ -588,12 +599,11 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
         logger.error(f"Task execution error for {task.task_id}: {e}")
         task_manager.update_task(task.task_id, status="failed", error=str(e))
 
-        # Notify user
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"*Task Failed* (#{task.task_id})\n\n" f"An unexpected error occurred:\n{str(e)}",
-            parse_mode="Markdown",
-        )
+        # Notify user using HTML formatter
+        message = f"Task Failed (#{task.task_id})\n\nAn unexpected error occurred:\n{str(e)}"
+        formatted_chunks = format_telegram_response(message, max_length=4000)
+        for chunk in formatted_chunks:
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
 
 async def show_task_status(user_id: int, update: Update):
@@ -606,33 +616,37 @@ async def show_task_status(user_id: int, update: Update):
     completed = [t for t in recent_tasks if t.status == "completed"][:3]
     failed = [t for t in recent_tasks if t.status == "failed"][:3]
 
-    # Build status message
-    message_parts = ["*Task Status*\n"]
+    # Build status message (plain text - formatter will convert to HTML)
+    message_parts = ["Task Status\n"]
 
     # Active tasks
     if active_tasks:
-        message_parts.append(f"\n*Active Tasks* ({len(active_tasks)}):")
+        message_parts.append(f"\nActive Tasks ({len(active_tasks)}):")
         for task in active_tasks:
             status_icon = "[P]" if task.status == "pending" else "[R]"
-            message_parts.append(f"{status_icon} `#{task.task_id}` - {task.description[:50]}...")
+            message_parts.append(f"{status_icon} #{task.task_id} - {task.description[:50]}...")
     else:
         message_parts.append("\nNo active tasks")
 
     # Recent completed
     if completed:
-        message_parts.append(f"\n\n*Recent Completed* ({len(completed)}):")
+        message_parts.append(f"\n\nRecent Completed ({len(completed)}):")
         for task in completed:
-            message_parts.append(f"• `#{task.task_id}` - {task.description[:40]}...")
+            message_parts.append(f"• #{task.task_id} - {task.description[:40]}...")
 
     # Recent failed
     if failed:
-        message_parts.append(f"\n\n*Recent Failed* ({len(failed)}):")
+        message_parts.append(f"\n\nRecent Failed ({len(failed)}):")
         for task in failed:
-            message_parts.append(f"• `#{task.task_id}` - {task.description[:40]}...")
+            message_parts.append(f"• #{task.task_id} - {task.description[:40]}...")
 
     message_parts.append("\n\nUse task ID to see details")
 
-    await update.message.reply_text("\n".join(message_parts), parse_mode="Markdown")
+    # Format and send using HTML formatter
+    message = "\n".join(message_parts)
+    formatted_chunks = format_telegram_response(message, max_length=4000)
+    for chunk in formatted_chunks:
+        await update.message.reply_text(chunk, parse_mode="HTML")
 
 
 async def process_message_async(
@@ -764,7 +778,7 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(warning_msg)
 
     # Send acknowledgment message
-    ack_message = await update.message.reply_text("⏳")
+    ack_message = await update.message.reply_text("🔄")
     ack_message_id = ack_message.message_id
 
     # Launch background task for orchestrator processing (no await)
@@ -1222,7 +1236,7 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info(f"User {user_id} (voice): {transcription}")
 
         # Send acknowledgment message
-        ack_message = await update.message.reply_text("⏳")
+        ack_message = await update.message.reply_text("🔄")
         ack_message_id = ack_message.message_id
 
         # Launch background task for processing (no await)
