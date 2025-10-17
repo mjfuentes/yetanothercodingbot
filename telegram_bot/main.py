@@ -413,10 +413,10 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Submit task to worker pool
             await worker_pool.submit(execute_code_task, new_task, update, context)
 
-            message = f"Task Retry Started (#{new_task.task_id})\n\n"
-            message += f"Retrying: {task.description}\n\n"
-            message += f"Original task: #{task_id}\n"
-            message += f"Error was: {task.error[:100] if task.error else 'Unknown'}\n\n"
+            message = f"Task Retry Started #{new_task.task_id}\n\n"
+            message += f"Retrying: {task.description}\n"
+            message += f"Original: #{task_id}\n"
+            message += f"Previous error: {task.error[:80] if task.error else 'Unknown'}\n\n"
             message += "I'll notify you when it's complete!"
 
             await send_formatted_response(context, user_id, message)
@@ -635,13 +635,13 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             logger.info(f"Task {task.task_id} completed successfully")
 
             # Notify user
-            notification = f"<b>Task Complete</b> (#{task.task_id})\n\n{task.description}\n\n<b>Result:</b>\n{result}"
+            notification = f"Task Complete #{task.task_id}\n\n{task.description}\n\n{result}"
         else:
             task_manager.update_task(task.task_id, status="failed", error=result)
             logger.error(f"Task {task.task_id} failed: {result}")
 
             # Notify user of failure
-            notification = f"<b>Task Failed</b> (#{task.task_id})\n\n{task.description}\n\n<b>Error:</b>\n{result}"
+            notification = f"Task Failed #{task.task_id}\n\n{task.description}\n\n{result}"
 
         # Format and send notification using send_formatted_response helper
         await send_formatted_response(context, user_id, notification)
@@ -651,7 +651,7 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
         task_manager.update_task(task.task_id, status="failed", error=str(e))
 
         # Notify user using send_formatted_response helper
-        message = f"Task Failed (#{task.task_id})\n\nAn unexpected error occurred:\n{str(e)}"
+        message = f"Task Failed #{task.task_id}\n\n{task.description}\n\nUnexpected error: {str(e)}"
         await send_formatted_response(context, user_id, message)
 
 
@@ -771,7 +771,9 @@ async def process_message_async(
             await worker_pool.submit(execute_code_task, task, update, context)
 
             # Send user-facing message
-            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+            response = (
+                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
+            )
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -939,7 +941,9 @@ async def process_document_async(
             task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
             logger.info(f"Submitted task {task.task_id} to worker pool (document)")
             await worker_pool.submit(execute_code_task, task, update, context)
-            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+            response = (
+                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
+            )
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -1084,7 +1088,9 @@ async def process_photo_async(
             task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
             logger.info(f"Submitted task {task.task_id} to worker pool (photo)")
             await worker_pool.submit(execute_code_task, task, update, context)
-            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+            response = (
+                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
+            )
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -1221,7 +1227,9 @@ async def process_voice_async(
             task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
             logger.info(f"Submitted task {task.task_id} to worker pool (voice)")
             await worker_pool.submit(execute_code_task, task, update, context)
-            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+            response = (
+                f"Background Task Started #{task.task_id}\n\n{user_message}\n\nI'll notify you when it's complete!"
+            )
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", transcription)
