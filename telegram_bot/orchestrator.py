@@ -147,9 +147,9 @@ BACKGROUND_TASK|<task_description>|<user_message>
 ```
 
 Examples:
-- User: "fix bug in main.py" → `BACKGROUND_TASK|Fix bug in main.py|Fixing the bug. You'll be notified when complete.`
-- User: "modify the orchestrator prompt" → `BACKGROUND_TASK|Modify orchestrator prompt|Updating the prompt. You'll be notified when complete.`
-- User: "add feature X" → `BACKGROUND_TASK|Add feature X|Adding feature X. You'll be notified when complete.`
+- User: "fix bug in main.py" → `BACKGROUND_TASK|Fix bug in main.py|Fixing the bug.`
+- User: "modify the orchestrator prompt" → `BACKGROUND_TASK|Modify orchestrator prompt|Updating the prompt.`
+- User: "add feature X" → `BACKGROUND_TASK|Add feature X|Adding feature X.`
 
 CRITICAL RULES:
 - ❌ NEVER use Task tool for coding work

@@ -132,12 +132,12 @@ BACKGROUND_TASK|<task_description>|<user_message>
 ```
 
 **Examples:**
-- User: "fix bug" → `BACKGROUND_TASK|Fix bug|Fixing the bug. You'll be notified when complete.`
-- User: "add feature" → `BACKGROUND_TASK|Add feature X|Adding feature X. You'll be notified when complete.`
-- User: "update file" → `BACKGROUND_TASK|Update file.py|Updating file.py. You'll be notified when complete.`
-- User: "commit changes" → `BACKGROUND_TASK|Commit changes|Committing changes. You'll be notified when complete.`
-- User: "refactor X" → `BACKGROUND_TASK|Refactor X|Refactoring X. You'll be notified when complete.`
-- User: "modify the prompt" → `BACKGROUND_TASK|Modify orchestrator prompt|Updating the orchestrator prompt. You'll be notified when complete.`
+- User: "fix bug" → `BACKGROUND_TASK|Fix bug|Fixing the bug in background.`
+- User: "add feature" → `BACKGROUND_TASK|Add feature X|Adding feature X.`
+- User: "update file" → `BACKGROUND_TASK|Update file.py|Updating file.py.`
+- User: "commit changes" → `BACKGROUND_TASK|Commit changes|Committing your changes.`
+- User: "refactor X" → `BACKGROUND_TASK|Refactor X|Refactoring X.`
+- User: "modify the prompt" → `BACKGROUND_TASK|Modify orchestrator prompt|Updating the orchestrator prompt.`
 
 **ALL coding = BACKGROUND_TASK. No exceptions.**
 
@@ -211,16 +211,16 @@ Where:
 **Examples:**
 ```
 User: "fix bug in main.py"
-You: BACKGROUND_TASK|Fix bug in main.py|Fixing the bug in main.py. You'll be notified when complete.
+You: BACKGROUND_TASK|Fix bug in main.py|Fixing the bug in main.py.
 
 User: "update session timeout"
-You: BACKGROUND_TASK|Update session timeout|Updating session timeout to 2 hours. You'll be notified when complete.
+You: BACKGROUND_TASK|Update session timeout|Updating session timeout to 2 hours.
 
 User: "commit my changes"
-You: BACKGROUND_TASK|Commit changes|Committing your changes with git. You'll be notified when complete.
+You: BACKGROUND_TASK|Commit changes|Committing your changes with git.
 
 User: "fix all"
-You: BACKGROUND_TASK|Fix all identified issues|Fixing the worker_pool.py timeout bug and log_monitor issue. You'll be notified when complete.
+You: BACKGROUND_TASK|Fix all identified issues|Fixing the worker_pool.py timeout bug and log_monitor issue.
 ```
 
 **CRITICAL:** Must be pipe-delimited (`|`) on a single line, not colon or newlines.
@@ -276,15 +276,15 @@ You: Respond directly with explanation (2-3 sentences)
 ### Workflow 2: ANY Code Change (Always Background)
 ```
 User: "update session timeout to 2 hours"
-You: BACKGROUND_TASK|Update session timeout|Updating session timeout to 2 hours in session.py. You'll be notified when complete.
+You: BACKGROUND_TASK|Update session timeout|Updating session timeout to 2 hours in session.py.
 Bot will: Parse response, create background task, send user message immediately
-User sees: "**Background Task Started** (#abc123)\n\nUpdating session timeout to 2 hours in session.py. You'll be notified when complete.\n\nI'll notify you when it's complete!"
+User sees: "**Background Task Started** (#abc123)\n\nUpdating session timeout to 2 hours in session.py.\n\nI'll notify you when it's complete!"
 ```
 
 ### Workflow 3: Bug Fixes (Always Background)
 ```
 User: "fix the bug in main.py line 42"
-You: BACKGROUND_TASK|Fix bug in main.py line 42|Fixing null pointer bug. You'll be notified when complete.
+You: BACKGROUND_TASK|Fix bug in main.py line 42|Fixing null pointer bug.
 Bot will: Create background task, notify user
 User sees: Immediate acknowledgment + notification when done
 ```
@@ -292,21 +292,21 @@ User sees: Immediate acknowledgment + notification when done
 ### Workflow 4: Multi-File Changes (Always Background)
 ```
 User: "add /restart command"
-You: BACKGROUND_TASK|Add /restart command|Adding /restart command with graceful shutdown. You'll be notified when complete.
+You: BACKGROUND_TASK|Add /restart command|Adding /restart command with graceful shutdown.
 Bot will: Create background task, notify user
 ```
 
 ### Workflow 5: Create New Project
 ```
 User: "create a Tetris game"
-You: BACKGROUND_TASK|Create Tetris game|Creating browser-based Tetris with game logic, rendering, controls, and scoring. You'll be notified when complete.
+You: BACKGROUND_TASK|Create Tetris game|Creating browser-based Tetris with game logic, rendering, controls, and scoring.
 Bot will: Execute as background task, notify when done
 ```
 
 ### Workflow 6: Analysis/Improvement Requests (Always BACKGROUND_TASK)
 ```
 User: "improve the error handling"
-You: BACKGROUND_TASK|Improve error handling|Analyzing error handling patterns and implementing improvements. You'll be notified when complete.
+You: BACKGROUND_TASK|Improve error handling|Analyzing error handling patterns and implementing improvements.
 Bot will: Create background task with full analysis + implementation
 User sees: Immediate acknowledgment + notification when done
 ```

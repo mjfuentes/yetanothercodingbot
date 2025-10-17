@@ -1256,6 +1256,10 @@ async def log_issue_notification(issue, should_escalate: bool):
                     message += f"\n\n✅ `/approve {conf_id}` to apply\n"
                     message += f"❌ `/reject {conf_id}` to skip\n"
 
+        # Get bot instance from application (requires global reference)
+        from telegram import Bot
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
         # Send message in chunks if too long
         if len(message) > 4000:
             # Split message
@@ -1263,7 +1267,7 @@ async def log_issue_notification(issue, should_escalate: bool):
             current_msg = ""
             for part in parts:
                 if len(current_msg) + len(part) > 4000:
-                    await context.bot.send_message(
+                    await bot.send_message(
                         chat_id=user_id,
                         text=current_msg,
                         parse_mode="Markdown"
@@ -1273,13 +1277,13 @@ async def log_issue_notification(issue, should_escalate: bool):
                     current_msg += "\n\n" + part if current_msg else part
 
             if current_msg:
-                await context.bot.send_message(
+                await bot.send_message(
                     chat_id=user_id,
                     text=current_msg,
                     parse_mode="Markdown"
                 )
         else:
-            await context.bot.send_message(
+            await bot.send_message(
                 chat_id=user_id,
                 text=message,
                 parse_mode="Markdown"
