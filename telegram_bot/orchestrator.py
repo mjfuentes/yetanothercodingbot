@@ -176,10 +176,10 @@ User query: {user_query}"""
     try:
         logger.info(f"Invoking orchestrator agent for: {user_query[:60]}...")
 
-        # Invoke Claude Code in interactive mode
-        # The orchestrator agent will automatically be available from .claude/agents/
+        # Invoke Claude Code with orchestrator agent
         cmd = [
             "claude", "chat",
+            "--agent", "orchestrator",  # Load orchestrator agent from .claude/agents/orchestrator.md
             "--model", "haiku",  # Fast responses for chat/routing (background tasks use Sonnet)
             "--permission-mode", "bypassPermissions"  # Auto-approve write operations
         ]
