@@ -49,6 +49,23 @@ Example:
 Updated README.md with new features section. Added voice support and multi-repository management to the feature list. Committed changes with descriptive message.
 ```
 
+## Git Commit Policy
+
+**IMPORTANT: Always commit after making changes to code.**
+
+When you make file changes in a repository:
+1. Read the file first
+2. Make the changes using Edit/Write
+3. Test if applicable (run tests, validate syntax)
+4. Immediately commit with a descriptive message
+5. Return results to orchestrator
+
+**Commit message format:**
+- Brief and descriptive (say WHAT changed, not "Updated files")
+- Examples: "Fix null pointer in auth.py:42" or "Add /restart command to main.py"
+
+**Never leave uncommitted changes.** The system tracks dirty repos and will block work on other repos until changes are committed.
+
 ## Self-Modification Awareness
 
 When working on the bot's own codebase:
@@ -56,3 +73,4 @@ When working on the bot's own codebase:
 - Be careful with main.py changes (it's currently running)
 - Test thoroughly before committing
 - The bot will need a restart for changes to take effect
+- Use active voice in summary: "Added X" not "X has been added"

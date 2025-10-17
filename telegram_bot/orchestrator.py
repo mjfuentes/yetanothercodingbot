@@ -1,12 +1,16 @@
 """
 Orchestrator agent integration for Telegram bot
-Simplified: Just invoke Claude Code with context, orchestrator handles everything
+
+Proper separation of concerns:
+- Orchestrator: Handles routing, user responses, simple queries via Task tool
+- code_worker: Spawned by orchestrator for all file operations and code changes
 """
 
 import asyncio
 import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -105,7 +109,7 @@ async def invoke_orchestrator(
     if image_path:
         context["image_path"] = image_path
 
-    # Format prompt with context - ENHANCED with background task instructions
+    # Format prompt - orchestrator now handles routing and spawns code_worker for coding tasks
     prompt = f"""CONTEXT:
 {json.dumps(context, indent=2)}
 
@@ -115,49 +119,58 @@ USER CONTEXT:
 - Available projects: cloudmate, Latinamerica2026, permanent_residence, groovetherapy, mjfuentes.github.io, agentlab
 - Use this project knowledge in conversations - reference their work and interests
 
-Handle this user query. You can respond directly, or spawn a code_worker agent for code modifications.
+YOUR ROLE:
+You are the routing orchestrator. For user queries:
+1. Answer directly if it's a question, chat, or knowledge request
+2. Spawn code_worker if it's a coding task (file ops, code changes, git commands)
+3. Use BACKGROUND_TASK format for complex tasks that should run async
 
-IMPORTANT CAPABILITIES:
-- You have Glob, Grep, and Read tools that work with ABSOLUTE PATHS
-- You can access ANY repository in available_repositories by using absolute paths
-- Example: To list files in /Users/matifuentes/Workspace/groovetherapy, use: Glob with pattern="*" and path="/Users/matifuentes/Workspace/groovetherapy"
-- Don't say you can't access repos - just use the tools with absolute paths!
+ROUTING DECISION:
+- QUESTIONS/CHAT: "what does X do?", "explain Y", "show me..." → Answer directly
+- CODING TASKS: "fix bug in X", "add feature", "edit file", "commit changes" → Use Task tool to spawn code_worker
+- COMPLEX WORK: Multi-file changes, refactoring, building projects → Use BACKGROUND_TASK format
+
+SPAWNING CODE_WORKER:
+For coding tasks, use the Task tool with:
+```
+subagent_type: "code_worker"
+description: "Brief task description"
+prompt: "Full context including workspace, task details, and any special instructions"
+```
+
+The code_worker will have access to: Read, Write, Edit, Glob, Grep, Bash
+
+IMPORTANT:
+- You can READ/ANALYZE files with your tools (Glob, Grep, Read)
+- But DON'T attempt Write/Edit/Bash - spawn code_worker instead!
+- code_worker handles all file modifications and git commands
 
 BACKGROUND TASK SUPPORT:
-- For COMPLEX tasks that involve multiple file changes, refactoring, or take >2 minutes, indicate this is a BACKGROUND_TASK
-- To trigger background task, start your response with: "BACKGROUND_TASK: <brief description>"
-- Then provide: The task will be executed in the background with full tool access
-- Background tasks get full Claude Code access (Read, Write, Edit, Bash, Grep, Glob, etc.)
-- User will be notified when the task completes
+For very complex tasks that should run async and notify user when done:
+- Start response with: "BACKGROUND_TASK: <brief description>"
+- Next line: User-facing message
+- Bot will create background task and notify when complete
 
-Examples of tasks that should be BACKGROUND:
+Examples of BACKGROUND tasks:
 - "refactor the entire authentication system"
 - "implement a new feature with tests"
+- "build a Tetris game from scratch"
 - "migrate database schema and update all models"
-- "fix all type errors in the codebase"
-- "build a new API endpoint with documentation"
-
-Examples of tasks that should be IMMEDIATE:
-- "what does this function do?"
-- "explain the architecture"
-- "show me the status of tasks"
-- "read and summarize this file"
 
 RESPONSE REQUIREMENTS:
 - ALWAYS return a response. If uncertain, respond with best interpretation
-- Don't ask for clarification - use conversation context to infer intent
-- For code modifications: Always include result details in response
-- For questions: Provide direct, conversational answer
-- Keep responses concise (2-3 sentences mobile-friendly)
+- For questions/chat: Direct, conversational answer (2-3 sentences)
+- For code tasks: Describe what you're spawning code_worker to do
+- Keep it brief: Mobile users, max 3 sentences
 - Use active voice: "Fixed X" not "X has been fixed"
+- Use Task tool output to compose your response
 
 Remember:
 - input_method="{input_method}" ({'be permissive with voice errors' if input_method == 'voice' else 'exact text input'})
 - When user references "you"/"your code"/"the bot": {bot_repository}
 - Current workspace: {current_workspace or workspace_path}
-- USE CONVERSATION CONTEXT: If user just asked about a specific repo, assume subsequent actions apply to that repo
-- This bot is deeply personal - tailor responses to Matias' interests and projects
-{'- IMAGE ATTACHED: Use Read tool to view image at: ' + image_path if image_path else ''}
+- This bot is deeply personal - tailor responses to Matias' interests
+{'- IMAGE ATTACHED: View at: ' + image_path if image_path else ''}
 
 User query: {user_query}"""
 
