@@ -4,14 +4,11 @@ For complex issues that need intelligent analysis, escalates to Claude API
 Uses smart caching to minimize API calls
 """
 
-import asyncio
-import logging
 import json
+import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-from pathlib import Path
 
-from log_analyzer import LogIssue, IssueLevel, IssueType
+from log_analyzer import LogIssue
 from orchestrator import invoke_orchestrator
 
 logger = logging.getLogger(__name__)
@@ -25,13 +22,9 @@ class LogClaudeEscalation:
         self.escalation_cache = {}  # Cache Claude responses
         self.cache_expiry = 3600  # Cache for 1 hour
         self.last_escalation_time = None
-        self.escalation_queue: List[LogIssue] = []  # Queue for issues to be analyzed
+        self.escalation_queue: list[LogIssue] = []  # Queue for issues to be analyzed
 
-    async def analyze_issues_with_claude(
-        self,
-        issues: List[LogIssue],
-        logs_context: Optional[str] = None
-    ) -> Dict:
+    async def analyze_issues_with_claude(self, issues: list[LogIssue], logs_context: str | None = None) -> dict:
         """
         Send complex issues to Claude for intelligent analysis
         Returns recommendations and fixes
@@ -51,7 +44,7 @@ class LogClaudeEscalation:
                 current_workspace=self.bot_repo_path,
                 bot_repository=self.bot_repo_path,
                 workspace_path=self.bot_repo_path,
-                task_manager=None  # Log analysis doesn't need task manager
+                task_manager=None,  # Log analysis doesn't need task manager
             )
 
             if not response or response.strip() == "":
@@ -67,21 +60,23 @@ class LogClaudeEscalation:
                 "analysis": response,
                 "recommendations": analysis.get("recommendations", []),
                 "severity_assessment": analysis.get("severity", "medium"),
-                "suggested_fixes": analysis.get("fixes", [])
+                "suggested_fixes": analysis.get("fixes", []),
             }
 
         except Exception as e:
             logger.error(f"Error escalating to Claude: {e}")
             return {"analysis": None, "recommendations": []}
 
-    def _build_escalation_prompt(self, issues: List[LogIssue], logs_context: Optional[str]) -> str:
+    def _build_escalation_prompt(self, issues: list[LogIssue], logs_context: str | None) -> str:
         """Build a prompt for Claude to analyze the issues"""
-        issues_text = "\n".join([
-            f"• [{issue.level.value.upper()}] {issue.title}\n"
-            f"  Description: {issue.description}\n"
-            f"  Evidence: {'; '.join(issue.evidence[:2])}"
-            for issue in issues
-        ])
+        issues_text = "\n".join(
+            [
+                f"• [{issue.level.value.upper()}] {issue.title}\n"
+                f"  Description: {issue.description}\n"
+                f"  Evidence: {'; '.join(issue.evidence[:2])}"
+                for issue in issues
+            ]
+        )
 
         prompt = f"""You are a bot debugging expert. Analyze these detected log issues and provide insights:
 
@@ -110,13 +105,9 @@ Be concise and technical."""
 
         return prompt
 
-    def _parse_claude_response(self, response: str, issues: List[LogIssue]) -> Dict:
+    def _parse_claude_response(self, response: str, issues: list[LogIssue]) -> dict:
         """Parse Claude's response for structured recommendations"""
-        result = {
-            "recommendations": [],
-            "severity": "medium",
-            "fixes": []
-        }
+        result = {"recommendations": [], "severity": "medium", "fixes": []}
 
         try:
             # Try to extract JSON from response
@@ -147,7 +138,7 @@ Be concise and technical."""
         # Only escalate every 30 minutes to avoid excessive API usage
         return time_since_last > timedelta(minutes=30)
 
-    def get_escalation_cache(self) -> Dict:
+    def get_escalation_cache(self) -> dict:
         """Get cached escalation responses"""
         return self.escalation_cache
 
@@ -155,7 +146,8 @@ Be concise and technical."""
         """Remove expired cache entries"""
         now = datetime.now()
         self.escalation_cache = {
-            k: v for k, v in self.escalation_cache.items()
+            k: v
+            for k, v in self.escalation_cache.items()
             if (now - v.get("timestamp", now)).total_seconds() < self.cache_expiry
         }
 
@@ -164,7 +156,7 @@ Be concise and technical."""
         self.escalation_queue.append(issue)
         logger.debug(f"Added issue to escalation queue: {issue.title}")
 
-    def get_escalation_queue(self) -> List[LogIssue]:
+    def get_escalation_queue(self) -> list[LogIssue]:
         """Get issues queued for Claude analysis"""
         return self.escalation_queue
 
@@ -178,16 +170,11 @@ class UserConfirmationManager:
     """Manage user confirmations for suggested fixes"""
 
     def __init__(self):
-        self.pending_confirmations: Dict[str, Dict] = {}
-        self.confirmed_actions: List[Dict] = []
-        self.rejected_actions: List[Dict] = []
+        self.pending_confirmations: dict[str, dict] = {}
+        self.confirmed_actions: list[dict] = []
+        self.rejected_actions: list[dict] = []
 
-    def create_confirmation_request(
-        self,
-        issue: LogIssue,
-        suggested_action: str,
-        confidence: float = 0.8
-    ) -> str:
+    def create_confirmation_request(self, issue: LogIssue, suggested_action: str, confidence: float = 0.8) -> str:
         """
         Create a confirmation request for a suggested fix
         Returns confirmation ID
@@ -200,12 +187,12 @@ class UserConfirmationManager:
             "suggested_action": suggested_action,
             "confidence": confidence,
             "created_at": datetime.now().isoformat(),
-            "status": "pending"
+            "status": "pending",
         }
 
         return confirmation_id
 
-    def confirm_action(self, confirmation_id: str, user_notes: Optional[str] = None) -> bool:
+    def confirm_action(self, confirmation_id: str, user_notes: str | None = None) -> bool:
         """User confirms to apply the suggested fix"""
         if confirmation_id not in self.pending_confirmations:
             return False
@@ -221,7 +208,7 @@ class UserConfirmationManager:
         logger.info(f"User confirmed action: {confirmation_id}")
         return True
 
-    def reject_action(self, confirmation_id: str, reason: Optional[str] = None) -> bool:
+    def reject_action(self, confirmation_id: str, reason: str | None = None) -> bool:
         """User rejects the suggested fix"""
         if confirmation_id not in self.pending_confirmations:
             return False
@@ -237,20 +224,20 @@ class UserConfirmationManager:
         logger.info(f"User rejected action: {confirmation_id}")
         return True
 
-    def get_pending_confirmations(self) -> List[Dict]:
+    def get_pending_confirmations(self) -> list[dict]:
         """Get all pending confirmation requests"""
         return list(self.pending_confirmations.values())
 
-    def get_confirmation_status(self, confirmation_id: str) -> Optional[Dict]:
+    def get_confirmation_status(self, confirmation_id: str) -> dict | None:
         """Get status of a specific confirmation"""
         if confirmation_id in self.pending_confirmations:
             return self.pending_confirmations[confirmation_id]
         return None
 
-    def get_action_history(self) -> Dict:
+    def get_action_history(self) -> dict:
         """Get history of user actions"""
         return {
             "confirmed": self.confirmed_actions,
             "rejected": self.rejected_actions,
-            "pending": list(self.pending_confirmations.values())
+            "pending": list(self.pending_confirmations.values()),
         }

@@ -8,7 +8,6 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RateLimitConfig:
     """Rate limit configuration"""
+
     requests_per_minute: int = 10
     requests_per_hour: int = 100
     burst_size: int = 3  # Allow small bursts
@@ -26,10 +26,10 @@ class RateLimiter:
     """Rate limiter with per-user tracking and queue system"""
 
     def __init__(self):
-        self.user_requests: Dict[int, deque] = {}  # user_id -> deque of timestamps
-        self.user_cooldowns: Dict[int, datetime] = {}  # user_id -> cooldown end time
+        self.user_requests: dict[int, deque] = {}  # user_id -> deque of timestamps
+        self.user_cooldowns: dict[int, datetime] = {}  # user_id -> cooldown end time
         self.config = RateLimitConfig()
-        self.queues: Dict[int, asyncio.Queue] = {}  # user_id -> request queue
+        self.queues: dict[int, asyncio.Queue] = {}  # user_id -> request queue
 
         logger.info("RateLimiter initialized")
 
@@ -57,7 +57,7 @@ class RateLimiter:
 
         return sum(1 for timestamp in requests if timestamp >= cutoff)
 
-    def check_rate_limit(self, user_id: int) -> tuple[bool, Optional[str]]:
+    def check_rate_limit(self, user_id: int) -> tuple[bool, str | None]:
         """
         Check if user can make a request
         Returns: (allowed, error_message)
@@ -83,7 +83,10 @@ class RateLimiter:
             # Start cooldown
             self.user_cooldowns[user_id] = now + timedelta(seconds=self.config.cooldown_seconds)
             logger.warning(f"User {user_id} exceeded per-minute rate limit ({minute_count} requests)")
-            return False, f"Too many requests. Limit: {self.config.requests_per_minute}/minute. Please wait {self.config.cooldown_seconds}s."
+            return (
+                False,
+                f"Too many requests. Limit: {self.config.requests_per_minute}/minute. Please wait {self.config.cooldown_seconds}s.",
+            )
 
         # Check per-hour limit
         hour_count = self._count_recent_requests(user_id, timedelta(hours=1))
@@ -167,10 +170,10 @@ class RateLimiter:
 
     def configure(
         self,
-        requests_per_minute: Optional[int] = None,
-        requests_per_hour: Optional[int] = None,
-        burst_size: Optional[int] = None,
-        cooldown_seconds: Optional[int] = None
+        requests_per_minute: int | None = None,
+        requests_per_hour: int | None = None,
+        burst_size: int | None = None,
+        cooldown_seconds: int | None = None,
     ):
         """Update rate limit configuration"""
         if requests_per_minute is not None:

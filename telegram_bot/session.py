@@ -3,15 +3,12 @@ Session management for Telegram bot
 Phase 2: Persistent sessions with conversation history
 """
 
-import asyncio
 import json
 import logging
-import os
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Message:
     """Conversation message"""
+
     role: str  # 'user' or 'assistant'
     content: str
     timestamp: str
@@ -27,25 +25,26 @@ class Message:
 @dataclass
 class Session:
     """User session with Claude Code"""
+
     user_id: int
     created_at: str
     last_activity: str
-    history: List[Message]
-    current_workspace: Optional[str] = None  # Current working repository/workspace
+    history: list[Message]
+    current_workspace: str | None = None  # Current working repository/workspace
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'Session':
+    def from_dict(cls, data: dict) -> "Session":
         # Convert message dicts to Message objects
-        history = [Message(**msg) for msg in data.get('history', [])]
+        history = [Message(**msg) for msg in data.get("history", [])]
         return cls(
-            user_id=data['user_id'],
-            created_at=data['created_at'],
-            last_activity=data['last_activity'],
+            user_id=data["user_id"],
+            created_at=data["created_at"],
+            last_activity=data["last_activity"],
             history=history,
-            current_workspace=data.get('current_workspace')
+            current_workspace=data.get("current_workspace"),
         )
 
 
@@ -57,7 +56,7 @@ class SessionManager:
         self.data_dir.mkdir(exist_ok=True)
         self.sessions_file = self.data_dir / "sessions.json"
         self.timeout_minutes = timeout_minutes
-        self.sessions: Dict[int, Session] = {}
+        self.sessions: dict[int, Session] = {}
 
         # Load existing sessions
         self._load_sessions()
@@ -70,7 +69,7 @@ class SessionManager:
             return
 
         try:
-            with open(self.sessions_file, 'r') as f:
+            with open(self.sessions_file) as f:
                 data = json.load(f)
                 for user_id_str, session_data in data.items():
                     user_id = int(user_id_str)
@@ -84,18 +83,15 @@ class SessionManager:
     def _save_sessions(self):
         """Save sessions to disk"""
         try:
-            data = {
-                str(user_id): session.to_dict()
-                for user_id, session in self.sessions.items()
-            }
+            data = {str(user_id): session.to_dict() for user_id, session in self.sessions.items()}
 
-            with open(self.sessions_file, 'w') as f:
+            with open(self.sessions_file, "w") as f:
                 json.dump(data, f, indent=2)
 
         except Exception as e:
             logger.error(f"Error saving sessions: {e}")
 
-    def get_session(self, user_id: int) -> Optional[Session]:
+    def get_session(self, user_id: int) -> Session | None:
         """Get existing session without creating one"""
         return self.sessions.get(user_id)
 
@@ -105,12 +101,7 @@ class SessionManager:
 
         if user_id not in self.sessions:
             # Create new session
-            session = Session(
-                user_id=user_id,
-                created_at=now,
-                last_activity=now,
-                history=[]
-            )
+            session = Session(user_id=user_id, created_at=now, last_activity=now, history=[])
             self.sessions[user_id] = session
             self._save_sessions()
             logger.info(f"Created new session for user {user_id}")
@@ -126,11 +117,7 @@ class SessionManager:
         """Add message to session history"""
         session = self.get_or_create_session(user_id)
 
-        message = Message(
-            role=role,
-            content=content,
-            timestamp=datetime.now().isoformat()
-        )
+        message = Message(role=role, content=content, timestamp=datetime.now().isoformat())
 
         session.history.append(message)
         session.last_activity = message.timestamp
@@ -138,7 +125,7 @@ class SessionManager:
 
         logger.info(f"Added {role} message to session {user_id} (history: {len(session.history)} messages)")
 
-    def get_history(self, user_id: int, limit: Optional[int] = None) -> List[Message]:
+    def get_history(self, user_id: int, limit: int | None = None) -> list[Message]:
         """Get conversation history for user"""
         session = self.get_or_create_session(user_id)
 
@@ -190,7 +177,7 @@ class SessionManager:
                 "message_count": 0,
                 "created_at": None,
                 "last_activity": None,
-                "current_workspace": None
+                "current_workspace": None,
             }
 
         session = self.sessions[user_id]
@@ -199,9 +186,9 @@ class SessionManager:
             "message_count": len(session.history),
             "created_at": session.created_at,
             "last_activity": session.last_activity,
-            "user_messages": sum(1 for msg in session.history if msg.role == 'user'),
-            "assistant_messages": sum(1 for msg in session.history if msg.role == 'assistant'),
-            "current_workspace": session.current_workspace
+            "user_messages": sum(1 for msg in session.history if msg.role == "user"),
+            "assistant_messages": sum(1 for msg in session.history if msg.role == "assistant"),
+            "current_workspace": session.current_workspace,
         }
 
     def set_workspace(self, user_id: int, workspace: str):
@@ -211,7 +198,7 @@ class SessionManager:
         self._save_sessions()
         logger.info(f"Set workspace for user {user_id}: {workspace}")
 
-    def get_workspace(self, user_id: int) -> Optional[str]:
+    def get_workspace(self, user_id: int) -> str | None:
         """Get current workspace for user session"""
         session = self.get_or_create_session(user_id)
         return session.current_workspace
@@ -261,7 +248,7 @@ class ClaudeCodeSession:
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
-                cwd=self.workspace
+                cwd=self.workspace,
             )
 
             if result.returncode != 0:

@@ -113,7 +113,7 @@ class TaskManager:
     def create_task(self, user_id: int, description: str, workspace: str, model: str = "sonnet") -> Task:
         """Create a new task"""
         now = datetime.now().isoformat()
-        task_id = str(uuid.uuid4())[:8]
+        task_id = str(uuid.uuid4())[:6]
 
         task = Task(
             task_id=task_id,

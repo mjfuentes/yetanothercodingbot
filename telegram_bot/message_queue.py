@@ -5,9 +5,10 @@ Ensures messages are processed in order, one at a time per user
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Any
 from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class QueuedMessage:
     """Represents a queued message"""
+
     user_id: int
     update: Any  # Telegram Update object
     context: Any  # Telegram Context object
@@ -49,7 +51,9 @@ class UserMessageQueue:
             # High priority message - add to priority list and trigger immediate processing
             self.priority_queue.append(message)
             self.priority_queue.sort(key=lambda m: m.priority, reverse=True)
-            logger.info(f"User {self.user_id}: Priority message queued: {message.handler_name} (priority={message.priority})")
+            logger.info(
+                f"User {self.user_id}: Priority message queued: {message.handler_name} (priority={message.priority})"
+            )
         else:
             # Normal priority message
             await self.queue.put(message)
@@ -86,8 +90,7 @@ class UserMessageQueue:
                     else:
                         # Wait for next normal priority message with timeout
                         self.current_message = await asyncio.wait_for(
-                            self.queue.get(),
-                            timeout=300  # 5 minute timeout per message
+                            self.queue.get(), timeout=300  # 5 minute timeout per message
                         )
 
                         wait_time = (datetime.now() - self.current_message.queued_at).total_seconds()
@@ -100,12 +103,9 @@ class UserMessageQueue:
                     await self.current_message.execute()
                     self.messages_processed += 1
 
-                    logger.debug(
-                        f"User {self.user_id}: Completed message "
-                        f"({self.messages_processed} total)"
-                    )
+                    logger.debug(f"User {self.user_id}: Completed message " f"({self.messages_processed} total)")
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Queue empty for 5 minutes - stop processor
                     logger.debug(f"User {self.user_id}: Queue timeout, stopping processor")
                     break
@@ -151,7 +151,7 @@ class MessageQueueManager:
         context: Any,
         handler: Callable,
         handler_name: str = "unknown",
-        priority: int = 0
+        priority: int = 0,
     ) -> None:
         """Queue a message for a user
 
@@ -177,7 +177,7 @@ class MessageQueueManager:
             handler=handler,
             queued_at=datetime.now(),
             handler_name=handler_name,
-            priority=priority
+            priority=priority,
         )
 
         await self.user_queues[user_id].enqueue(message)
@@ -199,10 +199,7 @@ class MessageQueueManager:
         """Get status of all queues"""
         return {
             "active_users": len(self.user_queues),
-            "queues": {
-                str(uid): q.get_status()
-                for uid, q in self.user_queues.items()
-            }
+            "queues": {str(uid): q.get_status() for uid, q in self.user_queues.items()},
         }
 
     async def get_user_status(self, user_id: int) -> dict | None:

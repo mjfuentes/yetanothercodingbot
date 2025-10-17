@@ -3,17 +3,15 @@ Monitoring, health checks, and error tracking
 Phase 7: Production hardening
 """
 
-import asyncio
 import json
 import logging
-import os
 import platform
-import psutil
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +19,19 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ErrorRecord:
     """Error tracking record"""
+
     timestamp: str
     error_type: str
     error_message: str
-    user_id: Optional[int]
+    user_id: int | None
     context: str
-    stack_trace: Optional[str] = None
+    stack_trace: str | None = None
 
 
 @dataclass
 class PerformanceMetric:
     """Performance metric record"""
+
     timestamp: str
     metric_name: str
     value: float
@@ -47,8 +47,8 @@ class HealthMonitor:
         self.errors_file = self.data_dir / "errors.json"
         self.metrics_file = self.data_dir / "metrics.json"
 
-        self.errors: List[ErrorRecord] = []
-        self.metrics: List[PerformanceMetric] = []
+        self.errors: list[ErrorRecord] = []
+        self.metrics: list[PerformanceMetric] = []
         self.start_time = datetime.now()
         self.request_count = 0
         self.error_count = 0
@@ -63,7 +63,7 @@ class HealthMonitor:
         # Load errors
         if self.errors_file.exists():
             try:
-                with open(self.errors_file, 'r') as f:
+                with open(self.errors_file) as f:
                     data = json.load(f)
                     self.errors = [ErrorRecord(**e) for e in data]
                 logger.info(f"Loaded {len(self.errors)} error records")
@@ -73,7 +73,7 @@ class HealthMonitor:
         # Load metrics
         if self.metrics_file.exists():
             try:
-                with open(self.metrics_file, 'r') as f:
+                with open(self.metrics_file) as f:
                     data = json.load(f)
                     self.metrics = [PerformanceMetric(**m) for m in data]
                 logger.info(f"Loaded {len(self.metrics)} performance metrics")
@@ -88,7 +88,7 @@ class HealthMonitor:
                 self.errors = self.errors[-1000:]
 
             data = [asdict(e) for e in self.errors]
-            with open(self.errors_file, 'w') as f:
+            with open(self.errors_file, "w") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving error records: {e}")
@@ -101,17 +101,12 @@ class HealthMonitor:
                 self.metrics = self.metrics[-1000:]
 
             data = [asdict(m) for m in self.metrics]
-            with open(self.metrics_file, 'w') as f:
+            with open(self.metrics_file, "w") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving metrics: {e}")
 
-    def record_error(
-        self,
-        error: Exception,
-        user_id: Optional[int] = None,
-        context: str = "unknown"
-    ):
+    def record_error(self, error: Exception, user_id: int | None = None, context: str = "unknown"):
         """Record an error"""
         import traceback
 
@@ -123,7 +118,7 @@ class HealthMonitor:
             error_message=str(error),
             user_id=user_id,
             context=context,
-            stack_trace=traceback.format_exc()
+            stack_trace=traceback.format_exc(),
         )
 
         self.errors.append(error_record)
@@ -133,12 +128,7 @@ class HealthMonitor:
 
     def record_metric(self, name: str, value: float, unit: str = ""):
         """Record a performance metric"""
-        metric = PerformanceMetric(
-            timestamp=datetime.now().isoformat(),
-            metric_name=name,
-            value=value,
-            unit=unit
-        )
+        metric = PerformanceMetric(timestamp=datetime.now().isoformat(), metric_name=name, value=value, unit=unit)
 
         self.metrics.append(metric)
         self._save_metrics()
@@ -155,7 +145,7 @@ class HealthMonitor:
             # System info
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
+            disk = psutil.disk_usage("/")
 
             # Process info
             process = psutil.Process()
@@ -167,10 +157,7 @@ class HealthMonitor:
 
             # Error rate (last hour)
             one_hour_ago = datetime.now() - timedelta(hours=1)
-            recent_errors = [
-                e for e in self.errors
-                if datetime.fromisoformat(e.timestamp) > one_hour_ago
-            ]
+            recent_errors = [e for e in self.errors if datetime.fromisoformat(e.timestamp) > one_hour_ago]
 
             # Request rate
             requests_per_minute = self.request_count / max(uptime_seconds / 60, 1)
@@ -178,7 +165,7 @@ class HealthMonitor:
             return {
                 "status": "healthy" if cpu_percent < 90 and memory.percent < 90 else "degraded",
                 "uptime_seconds": uptime_seconds,
-                "uptime_human": str(uptime).split('.')[0],  # Remove microseconds
+                "uptime_human": str(uptime).split(".")[0],  # Remove microseconds
                 "requests_total": self.request_count,
                 "requests_per_minute": round(requests_per_minute, 2),
                 "errors_total": self.error_count,
@@ -200,16 +187,13 @@ class HealthMonitor:
                     "system": platform.system(),
                     "python_version": sys.version.split()[0],
                     "hostname": platform.node(),
-                }
+                },
             }
         except Exception as e:
             logger.error(f"Error getting health status: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
 
-    def get_recent_errors(self, limit: int = 10) -> List[ErrorRecord]:
+    def get_recent_errors(self, limit: int = 10) -> list[ErrorRecord]:
         """Get recent errors"""
         return self.errors[-limit:]
 
@@ -217,10 +201,7 @@ class HealthMonitor:
         """Get error summary statistics"""
         # Last 24 hours
         one_day_ago = datetime.now() - timedelta(days=1)
-        recent_errors = [
-            e for e in self.errors
-            if datetime.fromisoformat(e.timestamp) > one_day_ago
-        ]
+        recent_errors = [e for e in self.errors if datetime.fromisoformat(e.timestamp) > one_day_ago]
 
         # Count by type
         error_types = {}
@@ -243,10 +224,7 @@ class HealthMonitor:
         """Get performance metrics summary"""
         # Last hour metrics
         one_hour_ago = datetime.now() - timedelta(hours=1)
-        recent_metrics = [
-            m for m in self.metrics
-            if datetime.fromisoformat(m.timestamp) > one_hour_ago
-        ]
+        recent_metrics = [m for m in self.metrics if datetime.fromisoformat(m.timestamp) > one_hour_ago]
 
         # Group by metric name
         metrics_by_name = {}
@@ -263,15 +241,12 @@ class HealthMonitor:
                     "avg": sum(values) / len(values),
                     "min": min(values),
                     "max": max(values),
-                    "count": len(values)
+                    "count": len(values),
                 }
 
-        return {
-            "metrics_last_hour": len(recent_metrics),
-            "averages": averages
-        }
+        return {"metrics_last_hour": len(recent_metrics), "averages": averages}
 
-    def check_alerts(self) -> List[str]:
+    def check_alerts(self) -> list[str]:
         """Check for alert conditions"""
         alerts = []
 
@@ -287,16 +262,13 @@ class HealthMonitor:
                 alerts.append(f"High memory usage: {memory.percent}%")
 
             # Disk alert
-            disk = psutil.disk_usage('/')
+            disk = psutil.disk_usage("/")
             if disk.percent > 90:
                 alerts.append(f"Low disk space: {disk.percent}% used")
 
             # Error rate alert
             one_hour_ago = datetime.now() - timedelta(hours=1)
-            recent_errors = [
-                e for e in self.errors
-                if datetime.fromisoformat(e.timestamp) > one_hour_ago
-            ]
+            recent_errors = [e for e in self.errors if datetime.fromisoformat(e.timestamp) > one_hour_ago]
             if len(recent_errors) > 50:
                 alerts.append(f"High error rate: {len(recent_errors)} errors in last hour")
 

@@ -4,6 +4,7 @@ Enhances plain text responses with HTML formatting for better display
 """
 
 import re
+import tempfile
 
 
 class ResponseFormatter:
@@ -206,22 +207,52 @@ class ResponseFormatter:
         return "\n".join(formatted_lines)
 
 
-def format_telegram_response(text: str, workspace_path: str | None = None, max_length: int = 4096) -> list[str]:
+def format_telegram_response(
+    text: str, workspace_path: str | None = None, max_length: int = 4096, document_threshold: int = 3000
+) -> list[str] | tuple[str, str]:
     """
-    Format response and split into Telegram-compatible chunks
+    Format response and split into Telegram-compatible chunks, or create .md document for long responses
 
     Args:
         text: Raw response text
         workspace_path: Workspace path for context
         max_length: Maximum message length (Telegram limit is 4096)
+        document_threshold: If formatted response exceeds this length, return as .md document
 
     Returns:
-        List of formatted message chunks
+        - List of formatted message chunks (for normal responses)
+        - Tuple of (summary_message, document_path) for long responses
     """
     formatter = ResponseFormatter(workspace_path)
     formatted = formatter.format_response(text)
 
-    # Split into chunks if needed
+    # Check if response is too long and should be sent as document
+    if len(formatted) > document_threshold:
+        # Create summary message
+        lines = text.split("\n")
+        summary_lines = []
+        char_count = 0
+
+        # Take first few lines as summary (max 500 chars)
+        for line in lines:
+            if char_count + len(line) > 500:
+                break
+            summary_lines.append(line)
+            char_count += len(line) + 1
+
+        summary = "\n".join(summary_lines)
+        if len(text) > char_count:
+            summary += "\n\n📄 Full response attached as document..."
+
+        # Create temporary markdown file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, prefix="response_") as tmp:
+            tmp.write(text)
+            tmp_path = tmp.name
+
+        # Return tuple indicating document mode: (summary, document_path)
+        return (formatter.format_response(summary), tmp_path)
+
+    # Normal flow: split into chunks if needed
     if len(formatted) <= max_length:
         return [formatted]
 

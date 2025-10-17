@@ -13,16 +13,10 @@ def test_path_formatting():
     test_cases = [
         (
             "The groovetherapy repository has been deleted from /Users/matifuentes/Workspace/groovetherapy",
-            "Should highlight absolute path"
+            "Should highlight absolute path",
         ),
-        (
-            "I modified telegram_bot/main.py to add the formatter",
-            "Should highlight relative path with extension"
-        ),
-        (
-            "Check ~/projects/myapp for the config",
-            "Should highlight home directory path"
-        ),
+        ("I modified telegram_bot/main.py to add the formatter", "Should highlight relative path with extension"),
+        ("Check ~/projects/myapp for the config", "Should highlight home directory path"),
     ]
 
     print("=" * 60)
@@ -41,18 +35,9 @@ def test_repository_formatting():
     formatter = ResponseFormatter()
 
     test_cases = [
-        (
-            "Do you want to delete groovetherapy?",
-            "Should highlight repository name"
-        ),
-        (
-            "The agentlab repository contains the bot code",
-            "Should bold repository references"
-        ),
-        (
-            "Working on myproject project now",
-            "Should highlight project references"
-        ),
+        ("Do you want to delete groovetherapy?", "Should highlight repository name"),
+        ("The agentlab repository contains the bot code", "Should bold repository references"),
+        ("Working on myproject project now", "Should highlight project references"),
     ]
 
     print("\n" + "=" * 60)

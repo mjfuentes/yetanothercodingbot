@@ -7,18 +7,21 @@ Run directly: python telegram_bot/test_queue_simple.py
 import asyncio
 import sys
 from datetime import datetime
-from message_queue import MessageQueueManager, QueuedMessage
+
+from message_queue import MessageQueueManager
 
 
 class MockUpdate:
     """Mock Telegram Update object"""
+
     def __init__(self, user_id: int, message_text: str = "test"):
-        self.effective_user = type('obj', (object,), {'id': user_id})()
-        self.message = type('obj', (object,), {'text': message_text})()
+        self.effective_user = type("obj", (object,), {"id": user_id})()
+        self.message = type("obj", (object,), {"text": message_text})()
 
 
 class MockContext:
     """Mock Telegram Context object"""
+
     pass
 
 
@@ -99,9 +102,7 @@ async def test_different_users_parallel():
     tasks = []
     for user_id in [1, 2, 3]:
         update = MockUpdate(user_id=user_id, message_text=f"user_{user_id}")
-        task = queue_manager.enqueue_message(
-            user_id, update, MockContext(), handler, f"user_{user_id}"
-        )
+        task = queue_manager.enqueue_message(user_id, update, MockContext(), handler, f"user_{user_id}")
         tasks.append(task)
 
     await asyncio.gather(*tasks)
@@ -218,6 +219,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

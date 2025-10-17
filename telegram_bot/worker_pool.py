@@ -7,7 +7,8 @@ queuing excess tasks for processing when workers become available.
 
 import asyncio
 import logging
-from typing import Callable, Any, Optional
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class WorkerPool:
             async with asyncio.timeout(30):
                 await asyncio.gather(*self.workers)
             logger.info("Worker pool stopped successfully")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Worker pool stop timeout, cancelling workers")
             for worker in self.workers:
                 worker.cancel()
@@ -128,8 +129,7 @@ class WorkerPool:
                             self.active_tasks += 1
 
                         logger.debug(
-                            f"Worker {worker_id} executing {task_func.__name__} "
-                            f"({self.active_tasks} active)"
+                            f"Worker {worker_id} executing {task_func.__name__} " f"({self.active_tasks} active)"
                         )
 
                         # Run the task
@@ -138,10 +138,7 @@ class WorkerPool:
                         logger.debug(f"Worker {worker_id} completed {task_func.__name__}")
 
                     except Exception as e:
-                        logger.error(
-                            f"Worker {worker_id} error executing {task_func.__name__}: {e}",
-                            exc_info=True
-                        )
+                        logger.error(f"Worker {worker_id} error executing {task_func.__name__}: {e}", exc_info=True)
                     finally:
                         async with self._lock:
                             self.active_tasks -= 1

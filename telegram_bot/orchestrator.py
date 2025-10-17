@@ -9,10 +9,7 @@ Proper separation of concerns:
 import asyncio
 import json
 import logging
-import os
-import subprocess
 from pathlib import Path
-from typing import Optional
 
 from git_tracker import get_git_tracker
 
@@ -47,12 +44,12 @@ async def invoke_orchestrator(
     user_query: str,
     input_method: str,  # "voice" or "text"
     conversation_history: list[dict],
-    current_workspace: Optional[str],
+    current_workspace: str | None,
     bot_repository: str,
     workspace_path: str,
     task_manager=None,  # TaskManager instance for background task creation
-    image_path: Optional[str] = None  # Path to uploaded image
-) -> Optional[str]:
+    image_path: str | None = None,  # Path to uploaded image
+) -> str | None:
     """
     Invoke orchestrator agent via Claude Code (fire-and-forget pattern).
 
@@ -76,7 +73,7 @@ async def invoke_orchestrator(
     # Check if blocked by dirty repos
     blocking_msg = git_tracker.get_blocking_message(target_repo)
     if blocking_msg:
-        logger.info(f"Blocking work due to dirty repos")
+        logger.info("Blocking work due to dirty repos")
         return blocking_msg
 
     # Get active tasks info if task_manager provided
@@ -87,12 +84,7 @@ async def invoke_orchestrator(
         # For now, get all active tasks - orchestrator will filter by context
         all_tasks = task_manager.tasks.values()
         active_tasks_info = [
-            {
-                "task_id": t.task_id,
-                "description": t.description,
-                "status": t.status,
-                "workspace": t.workspace
-            }
+            {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
             for t in all_tasks
             if t.status in ["pending", "in_progress"]
         ]
@@ -105,7 +97,7 @@ async def invoke_orchestrator(
         "current_workspace": current_workspace or workspace_path,
         "available_repositories": available_repos,
         "bot_repository": bot_repository,
-        "active_tasks": active_tasks_info
+        "active_tasks": active_tasks_info,
     }
 
     # Add image path if provided
@@ -178,9 +170,12 @@ User query: {user_query}"""
 
         # Invoke Claude Code (loads agents from .claude/agents/ automatically)
         cmd = [
-            "claude", "chat",
-            "--model", "haiku",  # Fast responses for chat/routing (background tasks use Sonnet)
-            "--permission-mode", "bypassPermissions"  # Auto-approve write operations
+            "claude",
+            "chat",
+            "--model",
+            "haiku",  # Fast responses for chat/routing (background tasks use Sonnet)
+            "--permission-mode",
+            "bypassPermissions",  # Auto-approve write operations
         ]
 
         logger.debug(f"Command: {' '.join(cmd)}")
@@ -194,7 +189,7 @@ User query: {user_query}"""
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=bot_repository,  # Run from bot repo to load .claude/agents/orchestrator.md
-            start_new_session=True  # Detach from parent process (fire-and-forget)
+            start_new_session=True,  # Detach from parent process (fire-and-forget)
         )
 
         try:
@@ -209,10 +204,9 @@ User query: {user_query}"""
             # Wait for orchestrator response with timeout (Haiku should be fast: 1-3s)
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=30.0  # 30 second timeout for Haiku
+                    process.communicate(), timeout=30.0  # 30 second timeout for Haiku
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("Orchestrator timeout after 30s")
                 process.kill()
                 await process.wait()
@@ -232,7 +226,7 @@ User query: {user_query}"""
             logger.info(f"Orchestrator response: {output[:100]}...")
             return output
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Catch timeout from outer try block
             logger.error("Orchestrator process timeout")
             if process:

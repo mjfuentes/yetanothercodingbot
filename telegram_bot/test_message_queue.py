@@ -4,24 +4,32 @@ Tests sequential processing of concurrent messages per user
 """
 
 import asyncio
-import pytest
 from datetime import datetime
-from message_queue import MessageQueueManager, UserMessageQueue, QueuedMessage
+
+import pytest
+from message_queue import MessageQueueManager
 
 
 class MockUpdate:
     """Mock Telegram Update object"""
+
     def __init__(self, user_id: int, message_text: str = "test"):
-        self.effective_user = type('obj', (object,), {'id': user_id})()
-        self.message = type('obj', (object,), {'text': message_text, 'chat': type('obj', (object,), {'send_action': asyncio.coroutine(lambda x: None)})()})()
+        self.effective_user = type("obj", (object,), {"id": user_id})()
+        self.message = type(
+            "obj",
+            (object,),
+            {
+                "text": message_text,
+                "chat": type("obj", (object,), {"send_action": asyncio.coroutine(lambda x: None)})(),
+            },
+        )()
 
 
 class MockContext:
     """Mock Telegram Context object"""
+
     def __init__(self):
-        self.bot = type('obj', (object,), {
-            'send_message': asyncio.coroutine(lambda **kwargs: None)
-        })()
+        self.bot = type("obj", (object,), {"send_message": asyncio.coroutine(lambda **kwargs: None)})()
 
 
 @pytest.mark.asyncio
@@ -38,11 +46,7 @@ async def test_single_message_processing():
     context = MockContext()
 
     await queue_manager.enqueue_message(
-        user_id=123,
-        update=update,
-        context=context,
-        handler=handler,
-        handler_name="test"
+        user_id=123, update=update, context=context, handler=handler, handler_name="test"
     )
 
     # Wait for processing
@@ -71,11 +75,7 @@ async def test_concurrent_messages_sequential_processing():
     for i in range(3):
         update = MockUpdate(user_id=123, message_text=f"message_{i}")
         task = queue_manager.enqueue_message(
-            user_id=123,
-            update=update,
-            context=MockContext(),
-            handler=handler,
-            handler_name=f"test_{i}"
+            user_id=123, update=update, context=MockContext(), handler=handler, handler_name=f"test_{i}"
         )
         tasks.append(task)
 
@@ -118,11 +118,7 @@ async def test_different_users_parallel_processing():
     for user_id in [1, 2, 3]:
         update = MockUpdate(user_id=user_id, message_text=f"user_{user_id}")
         task = queue_manager.enqueue_message(
-            user_id=user_id,
-            update=update,
-            context=MockContext(),
-            handler=handler,
-            handler_name=f"test_user_{user_id}"
+            user_id=user_id, update=update, context=MockContext(), handler=handler, handler_name=f"test_user_{user_id}"
         )
         tasks.append(task)
 
@@ -155,11 +151,7 @@ async def test_queue_manager_status():
 
     # Enqueue a message
     await queue_manager.enqueue_message(
-        user_id=123,
-        update=update,
-        context=MockContext(),
-        handler=handler,
-        handler_name="test"
+        user_id=123, update=update, context=MockContext(), handler=handler, handler_name="test"
     )
 
     # Should have one active user
@@ -188,11 +180,7 @@ async def test_queue_preserves_order():
     for i in range(5):
         update = MockUpdate(user_id=999, message_text=f"msg_{i:02d}")
         await queue_manager.enqueue_message(
-            user_id=999,
-            update=update,
-            context=MockContext(),
-            handler=handler,
-            handler_name=f"test_{i}"
+            user_id=999, update=update, context=MockContext(), handler=handler, handler_name=f"test_{i}"
         )
 
     # Wait for all to process
@@ -219,11 +207,7 @@ async def test_handler_exception_handling():
     for msg in messages:
         update = MockUpdate(user_id=456, message_text=msg)
         await queue_manager.enqueue_message(
-            user_id=456,
-            update=update,
-            context=MockContext(),
-            handler=handler,
-            handler_name="test"
+            user_id=456, update=update, context=MockContext(), handler=handler, handler_name="test"
         )
 
     await asyncio.sleep(0.5)

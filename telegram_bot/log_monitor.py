@@ -6,13 +6,11 @@ Runs asynchronously without blocking bot operations
 
 import asyncio
 import logging
-import json
-from datetime import datetime
-from pathlib import Path
-from typing import Callable, Optional, Dict, List
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
-from log_analyzer import LocalLogAnalyzer, LogIssue, IssueLevel, IssueType
+from log_analyzer import IssueLevel, IssueType, LocalLogAnalyzer, LogIssue
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MonitoringConfig:
     """Configuration for log monitoring"""
+
     log_path: str
     check_interval_seconds: int = 300  # Check every 5 minutes
     analysis_window_hours: int = 1  # Analyze last 1 hour of logs
@@ -37,8 +36,8 @@ class LogMonitorTask:
         self.analyzer = LocalLogAnalyzer(config.log_path)
         self.running = False
         self.last_check_time = None
-        self.detection_history: Dict[str, int] = {}  # Track recurring issues
-        self.issue_cache: List[LogIssue] = []  # Cache for Claude escalation
+        self.detection_history: dict[str, int] = {}  # Track recurring issues
+        self.issue_cache: list[LogIssue] = []  # Cache for Claude escalation
 
     async def start(self, notification_callback: Callable):
         """
@@ -93,7 +92,7 @@ class LogMonitorTask:
                 issues_to_notify.append(issue)
 
             # Limit notifications
-            issues_to_notify = issues_to_notify[:self.config.max_notifications_per_check]
+            issues_to_notify = issues_to_notify[: self.config.max_notifications_per_check]
 
             # Notify user about each issue
             for issue in issues_to_notify:
@@ -132,7 +131,7 @@ class LogMonitorTask:
 
         return False
 
-    def get_cached_issues(self) -> List[LogIssue]:
+    def get_cached_issues(self) -> list[LogIssue]:
         """Get cached issues for later Claude analysis"""
         return self.issue_cache
 
@@ -144,14 +143,14 @@ class LogMonitorTask:
         """Clear cached issues after Claude has analyzed them"""
         self.issue_cache = []
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Get monitoring statistics"""
         return {
             "running": self.running,
             "last_check": self.last_check_time.isoformat() if self.last_check_time else None,
             "issues_detected": len(self.detection_history),
             "recurring_issues": {k: v for k, v in self.detection_history.items() if v > 1},
-            "escalation_queue_size": len(self.issue_cache)
+            "escalation_queue_size": len(self.issue_cache),
         }
 
 
@@ -161,8 +160,8 @@ class LogMonitorManager:
     def __init__(self, config: MonitoringConfig):
         self.config = config
         self.monitor = LogMonitorTask(config)
-        self.monitor_task: Optional[asyncio.Task] = None
-        self.notification_callback: Optional[Callable] = None
+        self.monitor_task: asyncio.Task | None = None
+        self.notification_callback: Callable | None = None
 
     async def start(self, notification_callback: Callable):
         """Start monitoring"""
@@ -171,9 +170,7 @@ class LogMonitorManager:
             return
 
         self.notification_callback = notification_callback
-        self.monitor_task = asyncio.create_task(
-            self.monitor.start(notification_callback)
-        )
+        self.monitor_task = asyncio.create_task(self.monitor.start(notification_callback))
         logger.info("Log monitor manager started")
 
     async def stop(self):
@@ -186,16 +183,16 @@ class LogMonitorManager:
         """Check if monitor is running"""
         return self.monitor.running
 
-    async def manual_check(self) -> Dict:
+    async def manual_check(self) -> dict:
         """Manually trigger a check (useful for testing)"""
         await self.monitor._check_and_notify()
         return self.monitor.analyzer.get_summary()
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Get current monitoring stats"""
         return self.monitor.get_stats()
 
-    def get_escalation_queue(self) -> List[LogIssue]:
+    def get_escalation_queue(self) -> list[LogIssue]:
         """Get issues queued for Claude analysis"""
         return self.monitor.get_cached_issues()
 

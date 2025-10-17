@@ -6,7 +6,6 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional, Set, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +15,14 @@ class GitTracker:
 
     def __init__(self, data_file: str = "data/git_tracker.json"):
         self.data_file = data_file
-        self.dirty_repos: Dict[str, str] = {}  # {repo_path: last_operation}
+        self.dirty_repos: dict[str, str] = {}  # {repo_path: last_operation}
         self._load()
 
     def _load(self):
         """Load dirty repos from disk"""
         try:
             if Path(self.data_file).exists():
-                with open(self.data_file, 'r') as f:
+                with open(self.data_file) as f:
                     self.dirty_repos = json.load(f)
                 logger.info(f"Loaded {len(self.dirty_repos)} dirty repos from disk")
         except Exception as e:
@@ -34,7 +33,7 @@ class GitTracker:
         """Save dirty repos to disk"""
         try:
             Path(self.data_file).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.data_file, 'w') as f:
+            with open(self.data_file, "w") as f:
                 json.dump(self.dirty_repos, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving git tracker: {e}")
@@ -49,11 +48,7 @@ class GitTracker:
         try:
             # Run git status --porcelain
             result = subprocess.run(
-                ['git', 'status', '--porcelain'],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["git", "status", "--porcelain"], cwd=repo_path, capture_output=True, text=True, timeout=5
             )
 
             if result.returncode != 0:
@@ -64,9 +59,9 @@ class GitTracker:
 
             if has_changes:
                 # Count staged and unstaged
-                lines = result.stdout.strip().split('\n')
-                staged = sum(1 for line in lines if line[0] in 'MADRC')
-                unstaged = sum(1 for line in lines if line[1] in 'MADRC?')
+                lines = result.stdout.strip().split("\n")
+                staged = sum(1 for line in lines if line[0] in "MADRC")
+                unstaged = sum(1 for line in lines if line[1] in "MADRC?")
 
                 status = f"{len(lines)} files changed"
                 if staged:
@@ -113,7 +108,7 @@ class GitTracker:
             self._save()
             logger.info(f"Marked {repo_path} as clean")
 
-    def get_dirty_repos(self) -> Dict[str, str]:
+    def get_dirty_repos(self) -> dict[str, str]:
         """Get all repos with uncommitted changes"""
         # Verify each one still has changes
         to_remove = []
@@ -146,7 +141,7 @@ class GitTracker:
 
         return has_changes
 
-    def get_blocking_message(self, target_repo: str) -> Optional[str]:
+    def get_blocking_message(self, target_repo: str) -> str | None:
         """
         Get message if there are dirty repos blocking work on target_repo
 
@@ -194,7 +189,7 @@ class GitTracker:
 
 
 # Global instance
-_tracker: Optional[GitTracker] = None
+_tracker: GitTracker | None = None
 
 
 def get_git_tracker() -> GitTracker:

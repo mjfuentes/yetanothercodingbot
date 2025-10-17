@@ -92,6 +92,40 @@ log_escalation = LogClaudeEscalation(BOT_REPOSITORY)
 user_confirmations = UserConfirmationManager()
 
 
+async def send_formatted_response(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, response: str, workspace_path: str | None = None
+):
+    """
+    Send a formatted response to the user, either as text chunks or as a document attachment
+    if the response is too long.
+
+    Args:
+        context: Telegram context
+        user_id: User ID to send to
+        response: Raw response text
+        workspace_path: Optional workspace path for context
+    """
+    formatted_result = format_telegram_response(response, workspace_path=workspace_path)
+
+    # Check if result is a tuple (document mode) or list (normal chunks)
+    if isinstance(formatted_result, tuple):
+        # Document mode: send summary + attached file
+        summary, document_path = formatted_result
+        await context.bot.send_message(chat_id=user_id, text=summary, parse_mode="HTML")
+
+        # Send the markdown document
+        try:
+            with open(document_path, "rb") as doc:
+                await context.bot.send_document(chat_id=user_id, document=doc, filename="response.md")
+        finally:
+            # Clean up temporary file
+            Path(document_path).unlink(missing_ok=True)
+    else:
+        # Normal mode: send chunks
+        for chunk in formatted_result:
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+
+
 # Async wrapper functions for delegating writes to worker pool
 async def _async_add_session_message(user_id: int, role: str, content: str):
     """Async wrapper for session write - queued to worker pool"""
@@ -140,10 +174,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         recent_changes = None
 
-    welcome_message = "*Started fresh*\n\n"
+    welcome_message = "<b>Started fresh</b>\n\n"
 
     if recent_changes:
-        welcome_message += "*Recent updates:*\n"
+        welcome_message += "<b>Recent updates:</b>\n"
         for line in recent_changes.split("\n")[:2]:  # Show last 2 commits
             # Format: hash message -> • message
             parts = line.split(" ", 1)
@@ -153,7 +187,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome_message += "Send me a message or /help to see what I can do!"
 
-    await update.message.reply_text(welcome_message, parse_mode="Markdown")
+    await update.message.reply_text(welcome_message, parse_mode="HTML")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,27 +198,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Priority /help: User {update.effective_user.id}")
 
     help_text = """
-*Commands*
+<b>Commands</b>
 /status - Active tasks, API usage, errors
 /usage - Detailed API costs
 /retry - Retry failed tasks
 /start - Fresh conversation
 /clear - Reset history
 
-*What I can do*
-• Answer questions & explain concepts
+<b>What I can do</b>
+• Answer questions &amp; explain concepts
 • Code: create, fix, refactor, generate tests
 • Multi-repo: "in ~/path, do X"
 • Analyze files, PDFs, images
 • Transcribe voice messages
 • Complex tasks run in background
 
-*Rate Limits*
+<b>Rate Limits</b>
 30 req/min, 500 req/hour
 Use /usage to check spending
     """
 
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    await update.message.reply_text(help_text, parse_mode="HTML")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,9 +300,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Format and send using HTML formatter (handles entities properly)
     message = "\n".join(message_parts)
-    formatted_chunks = format_telegram_response(message, max_length=4000)
-    for chunk in formatted_chunks:
-        await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+    await send_formatted_response(context, user_id, message)
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -344,9 +376,7 @@ Pricing Info
 Last reset: {cost_stats['last_reset'][:19]}"""
 
     # Format and send using HTML formatter
-    formatted_chunks = format_telegram_response(message, max_length=4000)
-    for chunk in formatted_chunks:
-        await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+    await send_formatted_response(context, user_id, message)
 
 
 async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -365,9 +395,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task = task_manager.get_task(task_id)
         if not task:
             message = f"Task #{task_id} not found."
-            formatted_chunks = format_telegram_response(message, max_length=4000)
-            for chunk in formatted_chunks:
-                await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+            await send_formatted_response(context, user_id, message)
             return
 
         if task.user_id != user_id:
@@ -376,9 +404,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if task.status != "failed":
             message = f"Task #{task_id} is not failed (status: {task.status})."
-            formatted_chunks = format_telegram_response(message, max_length=4000)
-            for chunk in formatted_chunks:
-                await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+            await send_formatted_response(context, user_id, message)
             return
 
         # Retry the task
@@ -393,9 +419,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"Error was: {task.error[:100] if task.error else 'Unknown'}\n\n"
             message += "I'll notify you when it's complete!"
 
-            formatted_chunks = format_telegram_response(message, max_length=4000)
-            for chunk in formatted_chunks:
-                await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+            await send_formatted_response(context, user_id, message)
         else:
             await update.message.reply_text("Failed to retry task. Please try again.")
 
@@ -421,9 +445,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "\nUse /retry <task_id> to retry a specific task\n"
         message += "Example: /retry " + failed_tasks[0].task_id
 
-        formatted_chunks = format_telegram_response(message, max_length=4000)
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        await send_formatted_response(context, user_id, message)
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -611,20 +633,16 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             # Notify user of failure
             notification = f"<b>Task Failed</b> (#{task.task_id})\n\n{task.description}\n\n<b>Error:</b>\n{result}"
 
-        # Format and send notification using HTML formatter (handles entities properly)
-        formatted_chunks = format_telegram_response(notification, max_length=4000)
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        # Format and send notification using send_formatted_response helper
+        await send_formatted_response(context, user_id, notification)
 
     except Exception as e:
         logger.error(f"Task execution error for {task.task_id}: {e}")
         task_manager.update_task(task.task_id, status="failed", error=str(e))
 
-        # Notify user using HTML formatter
+        # Notify user using send_formatted_response helper
         message = f"Task Failed (#{task.task_id})\n\nAn unexpected error occurred:\n{str(e)}"
-        formatted_chunks = format_telegram_response(message, max_length=4000)
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        await send_formatted_response(context, user_id, message)
 
 
 async def show_task_status(user_id: int, update: Update):
@@ -759,11 +777,8 @@ async def process_message_async(
             output_tokens = cost_tracker.estimate_tokens(response)
         await worker_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
 
-        # Format and send response to user
-        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
-
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        # Format and send response to user (uses helper that handles document attachment)
+        await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
 
     except Exception as e:
         logger.error(f"Error in async message processing for user {user_id}: {e}")
@@ -920,11 +935,8 @@ async def process_document_async(
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
-        # Format and send response to user
-        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
-
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        # Format and send response to user (uses helper that handles document attachment)
+        await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
 
     except Exception as e:
         logger.error(f"Error in async document processing for user {user_id}: {e}")
@@ -1068,11 +1080,8 @@ async def process_photo_async(
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
-        # Format and send response to user
-        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
-
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        # Format and send response to user (uses helper that handles document attachment)
+        await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
 
     except Exception as e:
         logger.error(f"Error in async photo processing for user {user_id}: {e}")
@@ -1208,11 +1217,8 @@ async def process_voice_async(
         await worker_pool.submit(_async_add_session_message, user_id, "user", transcription)
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
-        # Format and send response to user
-        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
-
-        for chunk in formatted_chunks:
-            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
+        # Format and send response to user (uses helper that handles document attachment)
+        await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
 
     except Exception as e:
         logger.error(f"Error in async voice processing for user {user_id}: {e}")
