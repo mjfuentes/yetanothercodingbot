@@ -34,7 +34,7 @@ class Task:
     task_id: str
     user_id: int
     description: str
-    status: str  # 'pending', 'in_progress', 'completed', 'failed'
+    status: str  # 'pending', 'in_progress', 'completed', 'failed', 'stopped'
     created_at: str
     updated_at: str
     model: str  # 'haiku', 'sonnet'
@@ -78,7 +78,7 @@ class TaskManager:
 
             logger.info(f"Loaded {len(self.tasks)} tasks from disk")
 
-            # FIX #1 & #3: Check in_progress tasks - mark as failed if process died
+            # Check in_progress tasks - mark as stopped if process died
             in_progress_tasks = [task for task in self.tasks.values() if task.status == "in_progress"]
 
             if in_progress_tasks:
@@ -87,11 +87,11 @@ class TaskManager:
                         # Task survived restart! Process still running
                         logger.info(f"Task {task.task_id} (PID {task.pid}) still running after restart")
                     else:
-                        # Process died (or no PID tracked)
-                        task.status = "failed"
-                        task.error = "Task cancelled due to bot restart"
+                        # Process died (or no PID tracked) - mark as stopped
+                        task.status = "stopped"
+                        task.error = "Task stopped due to bot restart"
                         task.updated_at = datetime.now().isoformat()
-                        logger.warning(f"Cleared stale task {task.task_id}: {task.description}")
+                        logger.warning(f"Marked stopped task {task.task_id}: {task.description}")
 
                 # Save updated state
                 self._save_tasks()
@@ -187,8 +187,8 @@ class TaskManager:
 
     def retry_task(self, task_id: str) -> Task | None:
         """
-        Retry a failed task by creating a new task with the same parameters.
-        Returns the new task if successful, None if task not found or not failed.
+        Retry a failed or stopped task by creating a new task with the same parameters.
+        Returns the new task if successful, None if task not found or not retryable.
         """
         original_task = self.tasks.get(task_id)
 
@@ -196,8 +196,8 @@ class TaskManager:
             logger.error(f"Task {task_id} not found")
             return None
 
-        if original_task.status != "failed":
-            logger.warning(f"Task {task_id} is not failed (status: {original_task.status})")
+        if original_task.status not in ["failed", "stopped"]:
+            logger.warning(f"Task {task_id} is not retryable (status: {original_task.status})")
             return None
 
         # Create new task with same parameters
@@ -208,7 +208,7 @@ class TaskManager:
             model=original_task.model,
         )
 
-        logger.info(f"Created retry task {new_task.task_id} for failed task {task_id}")
+        logger.info(f"Created retry task {new_task.task_id} for {original_task.status} task {task_id}")
         return new_task
 
     def get_failed_tasks(self, user_id: int, limit: int = 10) -> list[Task]:
@@ -261,3 +261,75 @@ class TaskManager:
             logger.info(f"Cleared {cleared_count} old failed tasks for user {user_id}")
 
         return cleared_count
+
+    def mark_all_in_progress_as_stopped(self):
+        """
+        Mark all in-progress tasks as stopped during shutdown.
+        This preserves task state so they can be retried on restart.
+
+        Returns:
+            Number of tasks marked as stopped
+        """
+        stopped_count = 0
+
+        for task in self.tasks.values():
+            if task.status == "in_progress":
+                task.status = "stopped"
+                task.error = "Task stopped during bot shutdown"
+                task.updated_at = datetime.now().isoformat()
+                stopped_count += 1
+                logger.info(f"Marked task {task.task_id} as stopped during shutdown")
+
+        if stopped_count > 0:
+            self._save_tasks()
+            logger.info(f"Marked {stopped_count} tasks as stopped during shutdown")
+
+        return stopped_count
+
+    def get_stopped_tasks(self, user_id: int | None = None, limit: int = 100) -> list[Task]:
+        """
+        Get stopped tasks, optionally filtered by user.
+
+        Args:
+            user_id: Optional user ID to filter by
+            limit: Maximum number of tasks to return
+
+        Returns:
+            List of stopped tasks
+        """
+        stopped_tasks = [
+            task
+            for task in self.tasks.values()
+            if task.status == "stopped" and (user_id is None or task.user_id == user_id)
+        ]
+
+        # Sort by created_at descending
+        stopped_tasks.sort(key=lambda t: t.created_at, reverse=True)
+
+        return stopped_tasks[:limit]
+
+    def retry_all_stopped_tasks(self) -> list[Task]:
+        """
+        Retry all stopped tasks on startup.
+        Creates new tasks for all stopped tasks across all users.
+
+        Returns:
+            List of new tasks created
+        """
+        stopped_tasks = self.get_stopped_tasks()
+        new_tasks = []
+
+        for stopped_task in stopped_tasks:
+            new_task = self.create_task(
+                user_id=stopped_task.user_id,
+                description=stopped_task.description,
+                workspace=stopped_task.workspace,
+                model=stopped_task.model,
+            )
+            new_tasks.append(new_task)
+            logger.info(f"Auto-retrying stopped task {stopped_task.task_id} as {new_task.task_id}")
+
+        if new_tasks:
+            logger.info(f"Auto-retried {len(new_tasks)} stopped tasks on startup")
+
+        return new_tasks

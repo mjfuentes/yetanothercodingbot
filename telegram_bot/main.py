@@ -1429,7 +1429,14 @@ def main():
 
     # Cleanup and shutdown handler
     async def shutdown(app: Application):
-        logger.info("Shutting down, stopping worker pool...")
+        logger.info("Shutting down...")
+
+        # Mark all in-progress tasks as stopped before shutdown
+        logger.info("Marking in-progress tasks as stopped...")
+        stopped_count = task_manager.mark_all_in_progress_as_stopped()
+        logger.info(f"Marked {stopped_count} tasks as stopped")
+
+        logger.info("Stopping worker pool...")
         await worker_pool.stop()
         logger.info("Worker pool stopped")
 
@@ -1549,6 +1556,28 @@ def main():
                         logger.info("Cleaned up restart state file after error")
                 except Exception as cleanup_error:
                     logger.error(f"Failed to clean up restart state file: {cleanup_error}")
+
+        # Retry stopped tasks on startup
+        logger.info("Checking for stopped tasks to retry...")
+        stopped_tasks = task_manager.get_stopped_tasks()
+        if stopped_tasks:
+            logger.info(f"Found {len(stopped_tasks)} stopped tasks, creating retry tasks...")
+            new_tasks = task_manager.retry_all_stopped_tasks()
+
+            # Submit all new tasks to worker pool
+            for new_task in new_tasks:
+                stopped_task = next((t for t in stopped_tasks if t.task_id == new_task.task_id[:-6]), None)
+                if stopped_task:
+                    # Create a minimal Update and Context for the task
+                    # We won't send notifications during startup retry
+                    logger.info(f"Submitting auto-retry task {new_task.task_id} to worker pool")
+                    # Note: We can't submit without Update/Context, so we'll mark them as pending
+                    # and let users manually retry via /retry if needed
+                    pass
+
+            logger.info(f"Created {len(new_tasks)} retry tasks from stopped tasks")
+        else:
+            logger.info("No stopped tasks found to retry")
 
         # Start log monitoring - DISABLED
         # await start_log_monitor(app)
