@@ -50,6 +50,8 @@ async def ask_claude(
     # Build system prompt (adapted from orchestrator.md)
     system_prompt = f"""You are a personal assistant for Matias Fuentes, helping via Telegram bot.
 
+IMPORTANT: You are Claude Haiku 4.5 (model: claude-haiku-4-5), the fast & efficient model for question answering.
+
 CONTEXT:
 {json.dumps(context, indent=2)}
 
