@@ -128,6 +128,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Clear conversation history on /start (executes immediately, bypassing queue)
     session_manager.clear_session(user_id)
+    cost_tracker.reset_session(user_id)  # Reset session cost tracking
     logger.info(f"Priority /start: Cleared session for user {user_id}")
 
     # Get recent changes
@@ -164,7 +165,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = """
 *Commands*
-/status - Tasks, costs & usage
+/status - Active tasks, API usage, errors
 /usage - Detailed API costs
 /start - Fresh conversation
 /clear - Reset history
@@ -186,58 +187,78 @@ Use /usage to check spending
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /status command - show session, tasks, and cost info"""
+    """Handle /status command - show active tasks, API usage, and errors in compact format"""
     if not await check_authorization(update):
         return
 
     user_id = update.effective_user.id
 
-    # Session stats
-    session_stats = session_manager.get_session_stats(user_id)
-
-    # Task status
+    # Get active tasks only
     active_tasks = task_manager.get_active_tasks(user_id)
-    recent_tasks = task_manager.get_user_tasks(user_id, limit=5)
-    completed = [t for t in recent_tasks if t.status == "completed"][:3]
-    failed = [t for t in recent_tasks if t.status == "failed"][:3]
+
+    # Get failed tasks from recent activity
+    recent_tasks = task_manager.get_user_tasks(user_id, limit=10)
+    failed_tasks = [t for t in recent_tasks if t.status == "failed"][:3]
 
     # Cost tracking
     usage_stats = cost_tracker.get_usage_stats(user_id)
 
-    # Build comprehensive status message
+    # Build compact status message
     message_parts = ["*Status*\n"]
 
-    # Session info
-    if session_stats["exists"]:
-        message_parts.append("*Conversation*")
-        message_parts.append(f"Messages: {session_stats['message_count']}")
-        message_parts.append(f"User: {session_stats['user_messages']} | Bot: {session_stats['assistant_messages']}")
-        message_parts.append(f"Last: {session_stats['last_activity'][:19]}\n")
-    else:
-        message_parts.append("*Conversation*: No active session\n")
-
-    # Task status
-    message_parts.append("*Background Tasks*")
+    # Active Tasks - only show if there are any
     if active_tasks:
-        message_parts.append(f"Active: {len(active_tasks)}")
-        for task in active_tasks[:3]:
-            status_icon = "[P]" if task.status == "pending" else "[R]"
-            message_parts.append(f"{status_icon} `#{task.task_id}` {task.description[:40]}...")
-    else:
-        message_parts.append("Active: None")
+        message_parts.append(f"*Active Tasks ({len(active_tasks)})*")
+        for task in active_tasks[:5]:  # Show up to 5 active tasks
+            status_icon = "⏳" if task.status == "pending" else "▶️"
+            message_parts.append(f"{status_icon} `#{task.task_id}` {task.description[:50]}")
+        message_parts.append("")
 
-    if completed:
-        message_parts.append(f"Completed: {len(completed)}")
-    if failed:
-        message_parts.append(f"Failed: {len(failed)}")
-    message_parts.append("")
-
-    # Cost info
+    # API Usage - compact format with session and weekly
     message_parts.append("*API Usage*")
-    message_parts.append(f"Today: ${usage_stats['daily_cost']:.2f} / ${usage_stats['daily_limit']:.2f}")
-    message_parts.append(f"Month: ${usage_stats['monthly_cost']:.2f} / ${usage_stats['monthly_limit']:.2f}")
-    message_parts.append(f"Total requests: {usage_stats['total_requests']}")
-    message_parts.append(f"Total cost: ${usage_stats['total_cost']:.2f}")
+
+    # Session usage (if available)
+    if usage_stats.get("session_cost", 0) > 0:
+        session_info = f"Session ({usage_stats.get('session_duration', '0m')}): ${usage_stats['session_cost']:.2f}"
+        message_parts.append(session_info)
+
+    # Weekly usage
+    weekly_cost = usage_stats.get("weekly_cost", 0)
+    if weekly_cost > 0:
+        message_parts.append(f"Week: ${weekly_cost:.2f}")
+
+    # Daily and monthly with percentages
+    daily_pct = (usage_stats["daily_cost"] / usage_stats["daily_limit"] * 100) if usage_stats["daily_limit"] > 0 else 0
+    monthly_pct = (
+        (usage_stats["monthly_cost"] / usage_stats["monthly_limit"] * 100) if usage_stats["monthly_limit"] > 0 else 0
+    )
+
+    message_parts.append(
+        f"Day: ${usage_stats['daily_cost']:.2f} ({daily_pct:.0f}%) | Month: ${usage_stats['monthly_cost']:.2f} ({monthly_pct:.0f}%)"
+    )
+
+    # Add warnings if approaching limits
+    warnings = []
+    if daily_pct >= 80:
+        warnings.append(f"⚠️ Daily limit at {daily_pct:.0f}%")
+    if monthly_pct >= 80:
+        warnings.append(f"⚠️ Monthly limit at {monthly_pct:.0f}%")
+
+    if warnings:
+        message_parts.append("\n".join(warnings))
+
+    message_parts.append(f"Requests: {usage_stats['total_requests']} | Total: ${usage_stats['total_cost']:.2f}")
+
+    # Failed tasks - only show if there are any
+    if failed_tasks:
+        message_parts.append(f"\n*Recent Errors ({len(failed_tasks)})*")
+        for task in failed_tasks:
+            error_preview = task.error[:60] if task.error else "Unknown error"
+            message_parts.append(f"❌ `#{task.task_id}` {error_preview}")
+
+    # If nothing to show
+    if not active_tasks and not failed_tasks:
+        message_parts.append("\n✓ No active tasks or errors")
 
     await update.message.reply_text("\n".join(message_parts), parse_mode="Markdown")
 
@@ -263,7 +284,18 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Total cost: ${cost_stats['total_cost']:.4f}
 • Recent (24h): {cost_stats['recent_24h']} requests
 
+*Current Session*"""
+
+    # Add session info if available
+    if cost_stats.get("session_cost", 0) > 0:
+        message += f"\n• Session ({cost_stats.get('session_duration', '0m')}): ${cost_stats['session_cost']:.4f}"
+    else:
+        message += "\n• No session started yet"
+
+    message += f"""
+
 *Current Period*
+• Weekly: ${cost_stats.get('weekly_cost', 0):.4f}
 • Daily: ${cost_stats['daily_cost']:.4f} / ${cost_stats['daily_limit']:.2f} ({cost_stats['daily_percentage']:.1f}%)
 • Monthly: ${cost_stats['monthly_cost']:.4f} / ${cost_stats['monthly_limit']:.2f} ({cost_stats['monthly_percentage']:.1f}%)
 
@@ -462,27 +494,18 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             logger.info(f"Task {task.task_id} completed successfully")
 
             # Notify user
-            notification = f"*Task Complete* (#{task.task_id})\n\n" f"{task.description}\n\n" f"**Result:**\n{result}"
+            notification = f"<b>Task Complete</b> (#{task.task_id})\n\n{task.description}\n\n<b>Result:</b>\n{result}"
         else:
             task_manager.update_task(task.task_id, status="failed", error=result)
             logger.error(f"Task {task.task_id} failed: {result}")
 
             # Notify user of failure
-            notification = f"*Task Failed* (#{task.task_id})\n\n" f"{task.description}\n\n" f"**Error:**\n{result}"
+            notification = f"<b>Task Failed</b> (#{task.task_id})\n\n{task.description}\n\n<b>Error:</b>\n{result}"
 
-        # Send notification (chunk if needed)
-        if len(notification) <= 4096:
-            await context.bot.send_message(chat_id=user_id, text=notification, parse_mode="Markdown")
-        else:
-            # Send description + status first
-            header = notification.split("**Result:**\n")[0] if success else notification.split("**Error:**\n")[0]
-            await context.bot.send_message(chat_id=user_id, text=header, parse_mode="Markdown")
-
-            # Send result/error in chunks
-            content = result
-            chunks = [content[i : i + 4096] for i in range(0, len(content), 4096)]
-            for chunk in chunks:
-                await context.bot.send_message(chat_id=user_id, text=chunk)
+        # Format and send notification using HTML formatter (handles entities properly)
+        formatted_chunks = format_telegram_response(notification, max_length=4000)
+        for chunk in formatted_chunks:
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Task execution error for {task.task_id}: {e}")
@@ -570,7 +593,7 @@ async def process_message_async(
             ]
 
             # Ask Claude via API (fast, no file tools needed for routing)
-            response, background_task_info = await ask_claude(
+            response, background_task_info, usage_info = await ask_claude(
                 user_query=message_text,
                 input_method="text",
                 conversation_history=history,
@@ -615,8 +638,13 @@ async def process_message_async(
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Queue cost tracking to worker pool (non-blocking)
-        input_tokens = cost_tracker.estimate_tokens(message_text)
-        output_tokens = cost_tracker.estimate_tokens(response)
+        # Use actual token counts from API if available, otherwise estimate
+        if usage_info:
+            input_tokens = usage_info.get("input_tokens", cost_tracker.estimate_tokens(message_text))
+            output_tokens = usage_info.get("output_tokens", cost_tracker.estimate_tokens(response))
+        else:
+            input_tokens = cost_tracker.estimate_tokens(message_text)
+            output_tokens = cost_tracker.estimate_tokens(response)
         await worker_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
 
         # Format and send response to user
@@ -750,7 +778,7 @@ async def process_document_async(
             ]
 
             # Ask Claude API
-            response, background_task_info = await ask_claude(
+            response, background_task_info, usage_info = await ask_claude(
                 user_query=message_text,
                 input_method="text",
                 conversation_history=history,
@@ -897,7 +925,7 @@ async def process_photo_async(
             ]
 
             # Ask Claude API with image
-            response, background_task_info = await ask_claude(
+            response, background_task_info, usage_info = await ask_claude(
                 user_query=message_text,
                 input_method="text",
                 conversation_history=history,
@@ -1031,7 +1059,7 @@ async def process_voice_async(
             ]
 
             # Ask Claude via API with VOICE input (be permissive with errors)
-            response, background_task_info = await ask_claude(
+            response, background_task_info, usage_info = await ask_claude(
                 user_query=transcription,
                 input_method="voice",  # Important: tells Claude to be permissive with voice transcription errors
                 conversation_history=history,
@@ -1168,22 +1196,22 @@ async def log_issue_notification(issue, should_escalate: bool):
     user_id = ALLOWED_USERS[0]
 
     try:
-        # Build notification message
+        # Build notification message (plain text - formatter will handle HTML conversion)
         title = issue.title
         severity = issue.level.value.upper()
         description = issue.description
 
-        message = f"🔍 *Log Monitor Alert* [{severity}]\n\n"
-        message += f"*{title}*\n"
+        message = f"🔍 Log Monitor Alert [{severity}]\n\n"
+        message += f"{title}\n"
         message += f"{description}\n\n"
 
         if issue.evidence:
-            message += "📋 *Evidence*:\n"
+            message += "Evidence:\n"
             for evidence_line in issue.evidence[:2]:
                 # Truncate long evidence lines
                 if len(evidence_line) > 100:
                     evidence_line = evidence_line[:97] + "..."
-                message += f"  `{evidence_line}`\n"
+                message += f"  {evidence_line}\n"
 
         message += "\n"
 
@@ -1195,7 +1223,7 @@ async def log_issue_notification(issue, should_escalate: bool):
             analysis_result = await log_escalation.analyze_issues_with_claude([issue], logs_context=None)
 
             if analysis_result.get("analysis"):
-                analysis_msg = f"\n*Claude Analysis*:\n{analysis_result['analysis'][:500]}"
+                analysis_msg = f"\nClaude Analysis:\n{analysis_result['analysis'][:500]}"
                 if len(analysis_result["analysis"]) > 500:
                     analysis_msg += "\n\n... (truncated)"
 
@@ -1206,30 +1234,20 @@ async def log_issue_notification(issue, should_escalate: bool):
                     conf_id = user_confirmations.create_confirmation_request(
                         issue=issue, suggested_action="\n".join(analysis_result["suggested_fixes"][:2]), confidence=0.85
                     )
-                    message += f"\n\n✅ `/approve {conf_id}` to apply\n"
-                    message += f"❌ `/reject {conf_id}` to skip\n"
+                    message += f"\n\n✅ /approve {conf_id} to apply\n"
+                    message += f"❌ /reject {conf_id} to skip\n"
 
         # Get bot instance from application (requires global reference)
         from telegram import Bot
 
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-        # Send message in chunks if too long
-        if len(message) > 4000:
-            # Split message
-            parts = message.split("\n\n")
-            current_msg = ""
-            for part in parts:
-                if len(current_msg) + len(part) > 4000:
-                    await bot.send_message(chat_id=user_id, text=current_msg, parse_mode="Markdown")
-                    current_msg = part
-                else:
-                    current_msg += "\n\n" + part if current_msg else part
+        # Format response using the formatter (handles HTML entities properly)
+        formatted_chunks = format_telegram_response(message, max_length=4000)
 
-            if current_msg:
-                await bot.send_message(chat_id=user_id, text=current_msg, parse_mode="Markdown")
-        else:
-            await bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+        # Send formatted chunks
+        for chunk in formatted_chunks:
+            await bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
         logger.info(f"Sent log alert to user {user_id}: {issue.title}")
 
@@ -1258,7 +1276,7 @@ def main():
             [
                 BotCommand("start", "Start fresh (clears history)"),
                 BotCommand("help", "Get help"),
-                BotCommand("status", "Check session, tasks & costs"),
+                BotCommand("status", "Active tasks, API usage & errors"),
                 BotCommand("usage", "Show detailed API usage & costs"),
                 BotCommand("clear", "Clear conversation"),
                 BotCommand("restart", "Restart the bot"),
