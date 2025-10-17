@@ -81,7 +81,7 @@ async def check_authorization(update: Update) -> bool:
 
     if not ALLOWED_USERS or user_id not in ALLOWED_USERS:
         await update.message.reply_text(
-            "⛔ Unauthorized. Please contact the bot owner."
+            "Unauthorized. Please contact the bot owner."
         )
         logger.warning(f"Unauthorized access attempt by user {user_id}")
         return False
@@ -113,7 +113,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         recent_changes = None
 
-    welcome_message = "👋 *Hey!*\n\n"
+    welcome_message = "*Started fresh*\n\n"
 
     if recent_changes:
         welcome_message += "*Recent updates:*\n"
@@ -124,8 +124,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 welcome_message += f"• {parts[1]}\n"
         welcome_message += "\n"
 
-    welcome_message += "Send me a message or /help to see what I can do!\n\n"
-    welcome_message += "💭 _Conversation history cleared_"
+    welcome_message += "Send me a message or /help to see what I can do!"
 
     await update.message.reply_text(
         welcome_message,
@@ -139,42 +138,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     help_text = """
-📚 *How to use me:*
-
-🔹 *Quick Help*
-• Ask questions: "What's 2+2?"
-• Explain concepts: "How does async/await work?"
-• Get analysis: "Explain this code block"
-
-🔹 *Code Tasks*
-• Create: "Build a Python REST API"
-• Fix: "Fix this bug in my code"
-• Refactor: "Improve performance of this function"
-• Generate: "Write unit tests for my service"
-I handle complex tasks in the background! 🚀
-
-🔹 *Multi-Repository Support*
-Specify workspace inline in messages:
-• "in ~/myapp, create a file"
-• "for /workspace/api, fix auth"
-
-🔹 *Commands*
-/status - View tasks, costs & usage
-/usage - Detailed API cost breakdown
+*Commands*
+/status - Tasks, costs & usage
+/usage - Detailed API costs
 /start - Fresh conversation
 /clear - Reset history
-/help - This message
 
-🔹 *Limits & Costs*
-⚠️ Rate limits: 30 req/min, 500 req/hour
-💰 API usage is tracked and limited
-📊 Use /usage to check spending
+*What I can do*
+• Answer questions & explain concepts
+• Code: create, fix, refactor, generate tests
+• Multi-repo: "in ~/path, do X"
+• Analyze files, PDFs, images
+• Transcribe voice messages
+• Complex tasks run in background
 
-🔹 *Tips*
-✨ Upload files for analysis (PDFs, code, etc)
-🎤 Send voice messages (auto-transcribed)
-📋 I remember conversation context
-⏳ Complex tasks run in background
+*Rate Limits*
+30 req/min, 500 req/hour
+Use /usage to check spending
     """
 
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -200,35 +180,35 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usage_stats = cost_tracker.get_usage_stats(user_id)
 
     # Build comprehensive status message
-    message_parts = ["📊 *Status Overview*\n"]
+    message_parts = ["*Status*\n"]
 
     # Session info
     if session_stats['exists']:
-        message_parts.append(f"*💬 Conversation*")
+        message_parts.append(f"*Conversation*")
         message_parts.append(f"Messages: {session_stats['message_count']}")
         message_parts.append(f"User: {session_stats['user_messages']} | Bot: {session_stats['assistant_messages']}")
         message_parts.append(f"Last: {session_stats['last_activity'][:19]}\n")
     else:
-        message_parts.append("*💬 Conversation*: No active session\n")
+        message_parts.append("*Conversation*: No active session\n")
 
     # Task status
-    message_parts.append("*🔄 Background Tasks*")
+    message_parts.append("*Background Tasks*")
     if active_tasks:
         message_parts.append(f"Active: {len(active_tasks)}")
         for task in active_tasks[:3]:
-            status_icon = "⏳" if task.status == "pending" else "⚙️"
+            status_icon = "[P]" if task.status == "pending" else "[R]"
             message_parts.append(f"{status_icon} `#{task.task_id}` {task.description[:40]}...")
     else:
         message_parts.append("Active: None")
 
     if completed:
-        message_parts.append(f"✅ Recent completed: {len(completed)}")
+        message_parts.append(f"Completed: {len(completed)}")
     if failed:
-        message_parts.append(f"❌ Recent failed: {len(failed)}")
+        message_parts.append(f"Failed: {len(failed)}")
     message_parts.append("")
 
     # Cost info
-    message_parts.append("*💰 API Usage*")
+    message_parts.append("*API Usage*")
     message_parts.append(f"Today: ${usage_stats['daily_cost']:.2f} / ${usage_stats['daily_limit']:.2f}")
     message_parts.append(f"Month: ${usage_stats['monthly_cost']:.2f} / ${usage_stats['monthly_limit']:.2f}")
     message_parts.append(f"Total requests: {usage_stats['total_requests']}")
@@ -254,31 +234,31 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rate_stats = rate_limiter.get_user_stats(user_id)
 
     # Build detailed message
-    message = f"""💰 *API Usage & Costs*
+    message = f"""*API Usage & Costs*
 
-📊 *Total Usage*
+*Total Usage*
 • Total requests: {cost_stats['total_requests']}
 • Total cost: ${cost_stats['total_cost']:.4f}
 • Recent (24h): {cost_stats['recent_24h']} requests
 
-💵 *Current Period*
+*Current Period*
 • Daily: ${cost_stats['daily_cost']:.4f} / ${cost_stats['daily_limit']:.2f} ({cost_stats['daily_percentage']:.1f}%)
 • Monthly: ${cost_stats['monthly_cost']:.4f} / ${cost_stats['monthly_limit']:.2f} ({cost_stats['monthly_percentage']:.1f}%)
 
-⚡ *Rate Limits*
+*Rate Limits*
 • Last minute: {rate_stats['requests_last_minute']} / {rate_stats['limit_per_minute']} ({rate_stats['minute_percentage']:.0f}%)
 • Last hour: {rate_stats['requests_last_hour']} / {rate_stats['limit_per_hour']} ({rate_stats['hour_percentage']:.0f}%)"""
 
     if rate_stats['in_cooldown']:
-        message += f"\n• ⏳ Cooldown: {rate_stats['cooldown_remaining']}s remaining"
+        message += f"\n• Cooldown: {rate_stats['cooldown_remaining']}s remaining"
 
     # Add model breakdown if available
     if cost_stats['model_breakdown']:
-        message += "\n\n🤖 *By Model*\n"
+        message += "\n\n*By Model*\n"
         for model, stats in cost_stats['model_breakdown'].items():
             message += f"• {model}: {stats['requests']} requests (${stats['cost']:.4f})\n"
 
-    message += f"\n\n_Last reset: {cost_stats['last_reset'][:19]}_"
+    message += f"\n\nLast reset: {cost_stats['last_reset'][:19]}"
 
     await update.message.reply_text(message, parse_mode="Markdown")
 
@@ -295,7 +275,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Cleared session for user {user_id}")
 
     await update.message.reply_text(
-        "🗑️ Conversation cleared! Starting fresh."
+        "Conversation cleared! Starting fresh."
     )
 
 
@@ -309,7 +289,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send acknowledgment
     await update.message.reply_text(
-        "🔄 Restarting bot... Back in a moment."
+        "Restarting bot... back in a moment."
     )
 
     # Schedule restart after response is sent
@@ -421,8 +401,8 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
 
             # Notify user
             notification = (
-                f"✅ *Task Complete* (#{task.task_id})\n\n"
-                f"📝 {task.description}\n\n"
+                f"*Task Complete* (#{task.task_id})\n\n"
+                f"{task.description}\n\n"
                 f"**Result:**\n{result}"
             )
         else:
@@ -435,8 +415,8 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
 
             # Notify user of failure
             notification = (
-                f"❌ *Task Failed* (#{task.task_id})\n\n"
-                f"📝 {task.description}\n\n"
+                f"*Task Failed* (#{task.task_id})\n\n"
+                f"{task.description}\n\n"
                 f"**Error:**\n{result}"
             )
 
@@ -469,7 +449,7 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
         # Notify user
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"❌ *Task Failed* (#{task.task_id})\n\n"
+            text=f"*Task Failed* (#{task.task_id})\n\n"
                  f"An unexpected error occurred:\n{str(e)}",
             parse_mode="Markdown"
         )
@@ -486,22 +466,22 @@ async def show_task_status(user_id: int, update: Update):
     failed = [t for t in recent_tasks if t.status == 'failed'][:3]
 
     # Build status message
-    message_parts = ["📊 *Task Status*\n"]
+    message_parts = ["*Task Status*\n"]
 
     # Active tasks
     if active_tasks:
-        message_parts.append(f"\n🔄 *Active Tasks* ({len(active_tasks)}):")
+        message_parts.append(f"\n*Active Tasks* ({len(active_tasks)}):")
         for task in active_tasks:
-            status_icon = "⏳" if task.status == "pending" else "⚙️"
+            status_icon = "[P]" if task.status == "pending" else "[R]"
             message_parts.append(
                 f"{status_icon} `#{task.task_id}` - {task.description[:50]}..."
             )
     else:
-        message_parts.append("\n✨ No active tasks")
+        message_parts.append("\nNo active tasks")
 
     # Recent completed
     if completed:
-        message_parts.append(f"\n\n✅ *Recent Completed* ({len(completed)}):")
+        message_parts.append(f"\n\n*Recent Completed* ({len(completed)}):")
         for task in completed:
             message_parts.append(
                 f"• `#{task.task_id}` - {task.description[:40]}..."
@@ -509,13 +489,13 @@ async def show_task_status(user_id: int, update: Update):
 
     # Recent failed
     if failed:
-        message_parts.append(f"\n\n❌ *Recent Failed* ({len(failed)}):")
+        message_parts.append(f"\n\n*Recent Failed* ({len(failed)}):")
         for task in failed:
             message_parts.append(
                 f"• `#{task.task_id}` - {task.description[:40]}..."
             )
 
-    message_parts.append("\n\n💡 Use task ID to see details")
+    message_parts.append("\n\nUse task ID to see details")
 
     await update.message.reply_text(
         "\n".join(message_parts),
@@ -533,20 +513,20 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
     # Check rate limits
     allowed, error_msg = rate_limiter.check_rate_limit(user_id)
     if not allowed:
-        await update.message.reply_text(f"⚠️ {error_msg}")
+        await update.message.reply_text(error_msg)
         return
 
     # Check cost limits
     allowed, warning_msg = cost_tracker.check_limits(user_id)
     if not allowed:
-        await update.message.reply_text(f"🚫 {warning_msg}")
+        await update.message.reply_text(warning_msg)
         return
 
     # Record rate limit request
     rate_limiter.record_request(user_id)
 
     # Send immediate acknowledgment
-    status_msg = await update.message.reply_text("⏳ Working on it...")
+    status_msg = await update.message.reply_text("Working on it...")
 
     # Send warning if approaching limits (but don't block)
     if warning_msg:
@@ -603,7 +583,7 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
                 asyncio.create_task(execute_code_task(task, update, context))
 
                 # Send user-facing message
-                response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Add to conversation history
         session_manager.add_message(user_id, "user", message_text)
@@ -680,7 +660,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
     # Check file size (limit to 20MB for safety)
     if document.file_size > 20 * 1024 * 1024:
         await update.message.reply_text(
-            "❌ File too large. Maximum size is 20MB."
+            "File too large. Maximum size is 20MB."
         )
         return
 
@@ -721,7 +701,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
         logger.info(f"User {user_id} (document): {message_text[:100]}...")
 
         # Send immediate acknowledgment
-        status_msg = await update.message.reply_text("⏳ Processing file...")
+        status_msg = await update.message.reply_text("Processing file...")
 
         # Show typing indicator continuously in background
         async def keep_typing():
@@ -774,7 +754,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
                     asyncio.create_task(execute_code_task(task, update, context))
 
                     # Send user-facing message
-                    response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+                    response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
             # Add to conversation history
             session_manager.add_message(user_id, "user", message_text)
@@ -801,7 +781,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.error(f"Document handling error: {e}")
         await update.message.reply_text(
-            "❌ Error processing file. Please try again."
+            "Error processing file. Please try again."
         )
 
 
@@ -852,7 +832,7 @@ async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info(f"User {user_id} (photo): {message_text}")
 
         # Send immediate acknowledgment
-        status_msg = await update.message.reply_text("⏳ Processing image...")
+        status_msg = await update.message.reply_text("Processing image...")
 
         # Show typing indicator continuously in background
         async def keep_typing():
@@ -906,7 +886,7 @@ async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     asyncio.create_task(execute_code_task(task, update, context))
 
                     # Send user-facing message
-                    response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+                    response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
             # Add to conversation history
             session_manager.add_message(user_id, "user", message_text)
@@ -933,7 +913,7 @@ async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Photo handling error: {e}")
         await update.message.reply_text(
-            "❌ Error processing image. Please try again."
+            "Error processing image. Please try again."
         )
 
 
@@ -983,14 +963,14 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         if not transcription:
             await update.message.reply_text(
-                "❌ Transcription failed. Please try again or send text."
+                "Transcription failed. Please try again or send text."
             )
             return
 
         logger.info(f"User {user_id} (voice): {transcription}")
 
         # Send immediate acknowledgment
-        status_msg = await update.message.reply_text("⏳ Processing voice message...")
+        status_msg = await update.message.reply_text("Processing voice message...")
 
         # Show typing indicator continuously in background
         async def keep_typing():
@@ -1043,7 +1023,7 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     asyncio.create_task(execute_code_task(task, update, context))
 
                     # Send user-facing message
-                    response = f"🚀 **Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+                    response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
             # Add to conversation history
             session_manager.add_message(user_id, "user", transcription)
@@ -1068,7 +1048,7 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Voice message handling error: {e}")
         await update.message.reply_text(
-            "❌ Error processing voice message. Please try again."
+            "Error processing voice message. Please try again."
         )
 
 
@@ -1093,7 +1073,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update and update.message:
         await update.message.reply_text(
-            "❌ An error occurred. Please try again."
+            "An error occurred. Please try again."
         )
 
 
