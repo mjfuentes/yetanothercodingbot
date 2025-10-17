@@ -183,11 +183,11 @@ User query: {user_query}"""
             else:
                 messages.append({"role": "user", "content": user_query})
 
-        logger.info(f"Calling Claude API (Haiku) for: {user_query[:60]}...")
+        logger.info(f"Calling Claude API (Haiku 4.5) for: {user_query[:60]}...")
 
-        # Call API with Haiku (fast and cheap)
+        # Call API with Haiku 4.5 (fast and cheap - launched Oct 15, 2025)
         response = client.messages.create(
-            model="claude-haiku-4-20250514", max_tokens=2048, system=system_prompt, messages=messages
+            model="claude-haiku-4-5", max_tokens=2048, system=system_prompt, messages=messages
         )
 
         # Extract response text

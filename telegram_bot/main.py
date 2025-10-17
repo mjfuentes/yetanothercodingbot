@@ -339,16 +339,15 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info("Restarting bot process...")
             import sys
 
-            python = sys.executable
-            os.execl(python, python, *sys.argv)
+            # Exit cleanly - launchd will restart us automatically
+            sys.exit(0)
 
         except Exception as e:
             logger.error(f"Error during graceful restart: {e}")
-            # Try direct restart anyway
+            # Try exit anyway
             import sys
 
-            python = sys.executable
-            os.execl(python, python, *sys.argv)
+            sys.exit(0)
 
     # Schedule the restart task
     asyncio.create_task(graceful_restart())
