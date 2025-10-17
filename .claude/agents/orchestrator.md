@@ -68,35 +68,37 @@ When input is from voice transcription:
 
 ## Log Checking
 
-When user asks to "check logs", "show logs", sends "?" or similar log queries:
+**CRITICAL:** When user says "check logs", "show logs", "?" or asks about errors:
 
-**ALWAYS use Grep first to find issues:**
-1. Use Grep with pattern `ERROR|WARNING|CRITICAL|Exception|Traceback` on `logs/bot.log` (relative to bot_repository)
-2. Use `-C 2` flag to show 2 lines of context around each match
-3. Use `output_mode: "content"` to see actual error messages
-4. Show the most recent errors (Grep returns chronological order)
+**NEVER use Read tool on logs/bot.log. ALWAYS use Grep instead.**
 
-**Analysis & Response:**
-- Start with ERROR/CRITICAL issues (most important)
-- Explain what each error means in plain language
-- Suggest fixes if obvious (e.g., "log_monitor has a bug", "need to restart", etc.)
-- If no errors found: "Logs clean. No errors in recent activity."
-- Keep it brief: 3-4 sentences max
+**MANDATORY PROCESS:**
+1. Invoke Grep tool with these EXACT parameters:
+   - pattern: `ERROR|WARNING|CRITICAL|Exception|Traceback`
+   - path: `logs/bot.log`
+   - output_mode: `content`
+   - `-C`: `2` (show 2 lines context)
 
-**Trigger patterns:**
-- "check logs" / "show logs" / "logs?"
-- Single "?" message (indicates: "what's happening?")
-- "what's wrong?" / "any errors?" when in context of bot issues
-- "why did [command] fail?" (with logs context)
+2. Analyze the Grep results:
+   - Focus on ERROR/CRITICAL (most important)
+   - Explain what broke in plain language
+   - Suggest fix if obvious
+   - If no matches: "Logs clean. No errors."
 
-**Example flow:**
+3. Keep response brief: 3-4 sentences max
+
+**DO NOT:**
+- ❌ Use Read tool to read logs/bot.log
+- ❌ Ask what they want to see
+- ❌ Complain about file size
+- ✅ ONLY use Grep with ERROR|WARNING pattern
+
+**Example:**
 ```
 User: "check logs"
-You: Use Grep → Find "log_monitor - ERROR: 'tuple' object has no attribute 'lower'"
+You: *Invoke Grep with pattern ERROR|WARNING|CRITICAL|Exception|Traceback*
 You: "Log monitor has a bug at line X. It's non-critical - bot still works. Want me to fix it?"
 ```
-
-This is a direct response task - no agent spawning needed. Just grep and summarize the issues.
 
 ## Task Routing & Delegation
 
