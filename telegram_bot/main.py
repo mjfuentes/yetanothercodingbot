@@ -315,58 +315,32 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to send restart acknowledgment: {e}")
 
-    # Schedule graceful restart in background
-    async def graceful_restart():
-        """Gracefully restart the bot"""
-        try:
-            # Save restart state so we can notify user when back up
-            import json
-            from pathlib import Path
+    # Save restart state immediately (synchronously)
+    import json
 
-            restart_state = {
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "message_id": restart_msg.message_id if restart_msg else None,
-                "timestamp": asyncio.get_event_loop().time(),
-            }
+    restart_state = {
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "message_id": restart_msg.message_id if restart_msg else None,
+        "timestamp": asyncio.get_event_loop().time(),
+    }
 
-            restart_state_path = Path("data/restart_state.json")
-            restart_state_path.parent.mkdir(exist_ok=True)
-            with open(restart_state_path, "w") as f:
-                json.dump(restart_state, f)
+    restart_state_path = Path("data/restart_state.json")
+    restart_state_path.parent.mkdir(exist_ok=True)
+    with open(restart_state_path, "w") as f:
+        json.dump(restart_state, f)
 
-            logger.info(f"Saved restart state for user {user_id}")
+    logger.info(f"Saved restart state for user {user_id}")
 
-            # Give message time to send
-            await asyncio.sleep(1)
+    # Schedule exit after a brief delay to let message send
+    async def delayed_exit():
+        await asyncio.sleep(0.5)  # Just enough time for message to send
+        logger.info("Exiting for restart...")
+        import os
 
-            # Cleanup queue manager gracefully
-            logger.info("Cleaning up message queues...")
-            await queue_manager.cleanup_all()
+        os._exit(0)  # Force exit without cleanup - launchd will restart us
 
-            # Stop log monitor
-            logger.info("Stopping log monitor...")
-            await log_monitor_manager.stop()
-
-            # Give time for cleanup to complete
-            await asyncio.sleep(1)
-
-            # Restart the bot process
-            logger.info("Restarting bot process...")
-            import sys
-
-            # Exit cleanly - launchd will restart us automatically
-            sys.exit(0)
-
-        except Exception as e:
-            logger.error(f"Error during graceful restart: {e}")
-            # Try exit anyway
-            import sys
-
-            sys.exit(0)
-
-    # Schedule the restart task
-    asyncio.create_task(graceful_restart())
+    asyncio.create_task(delayed_exit())
 
 
 def is_priority_command(message_text: str) -> bool:
