@@ -29,6 +29,7 @@ from orchestrator import invoke_orchestrator
 from formatter import format_telegram_response
 from cost_tracker import CostTracker
 from rate_limiter import RateLimiter
+from message_queue import MessageQueueManager
 
 # Check if whisper is available
 try:
@@ -71,6 +72,7 @@ task_manager = TaskManager()
 claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
 cost_tracker = CostTracker()  # Track API costs
 rate_limiter = RateLimiter()  # Rate limiting
+queue_manager = MessageQueueManager()  # Message queue per user
 
 
 async def check_authorization(update: Update) -> bool:
@@ -521,11 +523,8 @@ async def show_task_status(user_id: int, update: Update):
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle regular text messages using orchestrator"""
-    if not await check_authorization(update):
-        return
-
+async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Implementation of message handling (called from queue)"""
     user_id = update.effective_user.id
     message_text = update.message.text
 
@@ -638,6 +637,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         typing_task.cancel()
 
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Queue text messages for sequential processing"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+    await queue_manager.enqueue_message(
+        user_id=user_id,
+        update=update,
+        context=context,
+        handler=_handle_message_impl,
+        handler_name="text_message"
+    )
+
+
 def transcribe_audio(file_path: str) -> Optional[str]:
     """Transcribe audio file using Whisper (sync function)"""
     if not WHISPER_AVAILABLE:
@@ -655,11 +669,8 @@ def transcribe_audio(file_path: str) -> Optional[str]:
         return None
 
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle document uploads (PDFs, text files, code files, etc.)"""
-    if not await check_authorization(update):
-        return
-
+async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Implementation of document handling (called from queue)"""
     user_id = update.effective_user.id
     document = update.message.document
     caption = update.message.caption or ""
@@ -794,11 +805,23 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photo uploads"""
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Queue document uploads for sequential processing"""
     if not await check_authorization(update):
         return
 
+    user_id = update.effective_user.id
+    await queue_manager.enqueue_message(
+        user_id=user_id,
+        update=update,
+        context=context,
+        handler=_handle_document_impl,
+        handler_name="document"
+    )
+
+
+async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Implementation of photo handling (called from queue)"""
     user_id = update.effective_user.id
     photo = update.message.photo[-1]  # Get highest resolution
     caption = update.message.caption or ""
@@ -914,11 +937,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice messages with Whisper transcription"""
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Queue photo uploads for sequential processing"""
     if not await check_authorization(update):
         return
 
+    user_id = update.effective_user.id
+    await queue_manager.enqueue_message(
+        user_id=user_id,
+        update=update,
+        context=context,
+        handler=_handle_photo_impl,
+        handler_name="photo"
+    )
+
+
+async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Implementation of voice handling (called from queue)"""
     user_id = update.effective_user.id
     voice_message = update.message.voice
 
@@ -1037,6 +1072,21 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Queue voice messages for sequential processing"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+    await queue_manager.enqueue_message(
+        user_id=user_id,
+        update=update,
+        context=context,
+        handler=_handle_voice_impl,
+        handler_name="voice"
+    )
+
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
     logger.error(f"Update {update} caused error {context.error}")
@@ -1080,6 +1130,13 @@ def main():
         ])
 
     application.post_init = post_init
+
+    # Cleanup queues on shutdown
+    async def shutdown(app: Application):
+        logger.info("Shutting down, cleaning up message queues...")
+        await queue_manager.cleanup_all()
+
+    application.post_stop = shutdown
 
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
