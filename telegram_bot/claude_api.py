@@ -23,14 +23,15 @@ async def ask_claude(
     available_repositories: list[str],
     active_tasks: list[dict],
     image_path: str | None = None,
-) -> tuple[str, dict | None]:
+) -> tuple[str, dict | None, dict | None]:
     """
     Ask Claude a question using Anthropic API (not Claude Code CLI)
 
     Returns:
-        (response_text, background_task_info)
+        (response_text, background_task_info, usage_info)
         - response_text: Direct answer for user
         - background_task_info: Dict with 'description' and 'user_message' if background task needed, else None
+        - usage_info: Dict with 'input_tokens', 'output_tokens' from API response
     """
 
     # Build context
@@ -221,7 +222,15 @@ User query: {user_query}"""
         # Extract response text
         response_text = response.content[0].text.strip()
 
-        logger.info(f"Claude API response: {response_text[:100]}...")
+        # Extract usage info
+        usage_info = {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+
+        logger.info(
+            f"Claude API response: {response_text[:100]}... (tokens: {usage_info['input_tokens']} in, {usage_info['output_tokens']} out)"
+        )
 
         # Check if response contains BACKGROUND_TASK anywhere (not just at start)
         if "BACKGROUND_TASK|" in response_text:
@@ -252,11 +261,11 @@ User query: {user_query}"""
                     }
 
                     # Return just the BACKGROUND_TASK line (we'll send task start message in main.py)
-                    return task_line, background_task
+                    return task_line, background_task, usage_info
 
         # Direct answer
-        return response_text, None
+        return response_text, None, usage_info
 
     except Exception as e:
         logger.error(f"Error calling Claude API: {e}")
-        return f"Error processing request: {str(e)}", None
+        return f"Error processing request: {str(e)}", None, None

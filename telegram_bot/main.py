@@ -167,6 +167,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 *Commands*
 /status - Active tasks, API usage, errors
 /usage - Detailed API costs
+/retry - Retry failed tasks
 /start - Fresh conversation
 /clear - Reset history
 
@@ -234,7 +235,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     message_parts.append(
-        f"Day: ${usage_stats['daily_cost']:.2f} ({daily_pct:.0f}%) | Month: ${usage_stats['monthly_cost']:.2f} ({monthly_pct:.0f}%)"
+        f"Day: ${usage_stats['daily_cost']:.2f} / ${usage_stats['daily_limit']:.2f} ({daily_pct:.0f}%)"
+    )
+    message_parts.append(
+        f"Month: ${usage_stats['monthly_cost']:.2f} / ${usage_stats['monthly_limit']:.2f} ({monthly_pct:.0f}%)"
     )
 
     # Add warnings if approaching limits
@@ -315,6 +319,75 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"\n\nLast reset: {cost_stats['last_reset'][:19]}"
 
     await update.message.reply_text(message, parse_mode="Markdown")
+
+
+async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /retry command - retry failed tasks"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+
+    # Check if task ID was provided
+    if context.args and len(context.args) > 0:
+        # Retry specific task
+        task_id = context.args[0].lstrip("#")  # Remove # if present
+
+        # Check if task exists and belongs to user
+        task = task_manager.get_task(task_id)
+        if not task:
+            await update.message.reply_text(f"Task `#{task_id}` not found.", parse_mode="Markdown")
+            return
+
+        if task.user_id != user_id:
+            await update.message.reply_text("You don't have permission to retry this task.")
+            return
+
+        if task.status != "failed":
+            await update.message.reply_text(
+                f"Task `#{task_id}` is not failed (status: {task.status}).", parse_mode="Markdown"
+            )
+            return
+
+        # Retry the task
+        new_task = task_manager.retry_task(task_id)
+        if new_task:
+            # Submit task to worker pool
+            await worker_pool.submit(execute_code_task, new_task, update, context)
+
+            message = f"*Task Retry Started* (#{new_task.task_id})\n\n"
+            message += f"Retrying: {task.description}\n\n"
+            message += f"Original task: `#{task_id}`\n"
+            message += f"Error was: {task.error[:100] if task.error else 'Unknown'}\n\n"
+            message += "I'll notify you when it's complete!"
+
+            await update.message.reply_text(message, parse_mode="Markdown")
+        else:
+            await update.message.reply_text("Failed to retry task. Please try again.")
+
+    else:
+        # Show list of failed tasks
+        failed_tasks = task_manager.get_failed_tasks(user_id, limit=10)
+
+        if not failed_tasks:
+            await update.message.reply_text("No failed tasks to retry! 🎉")
+            return
+
+        message = "*Failed Tasks*\n\n"
+        message += f"Found {len(failed_tasks)} failed task(s):\n\n"
+
+        for task in failed_tasks[:5]:  # Show up to 5
+            error_preview = task.error[:60] if task.error else "Unknown error"
+            message += f"❌ `#{task.task_id}` - {task.description[:50]}\n"
+            message += f"   Error: {error_preview}\n\n"
+
+        if len(failed_tasks) > 5:
+            message += f"... and {len(failed_tasks) - 5} more\n\n"
+
+        message += "\nUse `/retry <task_id>` to retry a specific task\n"
+        message += "Example: `/retry " + failed_tasks[0].task_id + "`"
+
+        await update.message.reply_text(message, parse_mode="Markdown")
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1278,6 +1351,7 @@ def main():
                 BotCommand("help", "Get help"),
                 BotCommand("status", "Active tasks, API usage & errors"),
                 BotCommand("usage", "Show detailed API usage & costs"),
+                BotCommand("retry", "Retry failed tasks"),
                 BotCommand("clear", "Clear conversation"),
                 BotCommand("restart", "Restart the bot"),
             ]
@@ -1371,6 +1445,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("retry", retry_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("restart", restart_command))
 

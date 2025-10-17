@@ -59,8 +59,8 @@ class UserUsage:
     records: list[UsageRecord]
     limits: dict  # Custom limits per user
     last_reset: str
-    session_start: str | None = None  # When current session started
     session_cost: float = 0.0  # Cost since session started
+    session_start: str | None = None  # When current session started
     last_warning: str | None = None  # Timestamp of last warning
 
     def to_dict(self) -> dict:
@@ -79,8 +79,8 @@ class UserUsage:
             records=records,
             limits=data.get("limits", DEFAULT_LIMITS.copy()),
             last_reset=data["last_reset"],
-            session_start=data.get("session_start"),
             session_cost=data.get("session_cost", 0.0),
+            session_start=data.get("session_start"),
             last_warning=data.get("last_warning"),
         )
 

@@ -1,14 +1,15 @@
 """
 Interactive Claude Code session handler
 Phase 3-4: Full tool access for code operations
+Enhanced with workflow enforcement for testing and commits
 """
 
 import asyncio
 import logging
-import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+
+from workflow_enforcer import WorkflowEnforcer
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,13 @@ class ClaudeInteractiveSession:
     Unlike non-interactive mode, this can use Read, Write, Edit, Bash, etc.
     """
 
-    def __init__(self, workspace: Path, model: str = "sonnet"):
+    def __init__(self, workspace: Path, model: str = "sonnet", enforce_workflow: bool = True):
         self.workspace = workspace
         self.model = model
-        self.process: Optional[subprocess.Popen] = None
-        self.task_id: Optional[str] = None
+        self.process: subprocess.Popen | None = None
+        self.task_id: str | None = None
+        self.enforce_workflow = enforce_workflow
+        self.workflow_enforcer = WorkflowEnforcer(workspace) if enforce_workflow else None
 
     async def start(self, task_id: str):
         """Start interactive Claude session"""
@@ -34,8 +37,10 @@ class ClaudeInteractiveSession:
             cmd = [
                 "claude",
                 "chat",
-                "--model", self.model,
-                "--permission-mode", "bypassPermissions"  # Auto-approve file operations
+                "--model",
+                self.model,
+                "--permission-mode",
+                "bypassPermissions",  # Auto-approve file operations
             ]
 
             logger.info(f"Starting Claude interactive session for task {task_id}")
@@ -47,7 +52,7 @@ class ClaudeInteractiveSession:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.workspace)
+                cwd=str(self.workspace),
             )
 
             logger.info(f"Interactive session started (PID: {self.process.pid})")
@@ -57,40 +62,49 @@ class ClaudeInteractiveSession:
             logger.error(f"Failed to start interactive session: {e}")
             return False
 
-    async def send_message(self, message: str, timeout: int = 300) -> Optional[str]:
-        """Send message to Claude and get response"""
+    async def send_message(self, message: str, timeout: int = 300) -> str | None:
+        """Send message to Claude and get response
+
+        Note: This closes stdin after sending the message, which causes the claude chat
+        process to execute and exit. This is intentional for background task execution.
+        """
         if not self.process or not self.process.stdin:
             logger.error("No active session")
             return None
 
         try:
-            # Send message
+            # Send message and close stdin to trigger execution
             self.process.stdin.write(f"{message}\n".encode())
             await self.process.stdin.drain()
+            self.process.stdin.close()  # Close stdin to signal we're done (synchronous, no await)
+            await self.process.stdin.wait_closed()  # Wait for stdin to actually close
+            logger.debug(f"Sent message to Claude and closed stdin (task {self.task_id})")
 
-            # Read response with timeout
+            # Wait for process to complete with timeout
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    self.process.communicate(),
-                    timeout=timeout
-                )
+                stdout, stderr = await asyncio.wait_for(self.process.communicate(), timeout=timeout)
 
                 response = stdout.decode().strip()
 
                 if stderr:
                     error_msg = stderr.decode().strip()
                     if error_msg:
-                        logger.warning(f"Claude stderr: {error_msg}")
+                        logger.debug(f"Claude stderr (task {self.task_id}): {error_msg}")
 
-                return response
+                if response:
+                    logger.debug(f"Received response from Claude (task {self.task_id}): {len(response)} chars")
+                    return response
+                else:
+                    logger.warning(f"Empty response from Claude (task {self.task_id})")
+                    return None
 
-            except asyncio.TimeoutError:
-                logger.error(f"Response timeout after {timeout}s")
+            except TimeoutError:
+                logger.error(f"Response timeout after {timeout}s (task {self.task_id})")
                 await self.terminate()
                 return None
 
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error(f"Error sending message (task {self.task_id}): {e}")
             await self.terminate()
             return None
 
@@ -104,8 +118,10 @@ class ClaudeInteractiveSession:
                     await asyncio.wait_for(self.process.wait(), timeout=5)
                     logger.info(f"Session terminated for task {self.task_id}")
                 else:
-                    logger.info(f"Session already exited for task {self.task_id} (returncode: {self.process.returncode})")
-            except asyncio.TimeoutError:
+                    logger.info(
+                        f"Session already exited for task {self.task_id} (returncode: {self.process.returncode})"
+                    )
+            except TimeoutError:
                 self.process.kill()
                 logger.warning(f"Session killed (timeout) for task {self.task_id}")
             except ProcessLookupError:
@@ -117,9 +133,9 @@ class ClaudeInteractiveSession:
 
             self.process = None
 
-    async def execute_task(self, task_description: str, bot_repo_path: Optional[str] = None) -> tuple[bool, str]:
+    async def execute_task(self, task_description: str, bot_repo_path: str | None = None) -> tuple[bool, str]:
         """
-        Execute a coding task
+        Execute a coding task with workflow enforcement
         Returns: (success, result_message)
         """
         try:
@@ -144,6 +160,11 @@ Structure:
 
 Use your natural language understanding to determine if the user wants you to modify your own code or work on a different project."""
 
+            # Add workflow enforcement context
+            workflow_context = ""
+            if self.enforce_workflow and self.workflow_enforcer:
+                workflow_context = self.workflow_enforcer.get_workflow_prompt_context()
+
             # Send task with clear instructions
             prompt = f"""{bot_context}
 
@@ -151,6 +172,8 @@ User request: {task_description}
 
 Working directory: {self.workspace}
 You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
+
+{workflow_context}
 
 Complete the task and provide a concise summary of what you did."""
 
@@ -160,10 +183,24 @@ Complete the task and provide a concise summary of what you did."""
             # Cleanup
             await self.terminate()
 
-            if response:
-                return True, response
-            else:
+            if not response:
                 return False, "No response from Claude"
+
+            # Enforce workflow if enabled
+            workflow_result = ""
+            if self.enforce_workflow and self.workflow_enforcer:
+                logger.info(f"Enforcing workflow for task {self.task_id}")
+                success, workflow_msg = self.workflow_enforcer.enforce_workflow(task_description)
+
+                workflow_result = f"\n\n{'='*60}\nWORKFLOW ENFORCEMENT\n{'='*60}\n{workflow_msg}\n"
+
+                if not success:
+                    logger.warning(f"Workflow enforcement failed for task {self.task_id}")
+                    return False, response + workflow_result
+                else:
+                    logger.info(f"Workflow enforcement passed for task {self.task_id}")
+
+            return True, response + workflow_result
 
         except Exception as e:
             logger.error(f"Task execution error: {e}")
@@ -174,8 +211,9 @@ Complete the task and provide a concise summary of what you did."""
 class ClaudeSessionPool:
     """Pool of Claude sessions for concurrent task execution"""
 
-    def __init__(self, max_concurrent: int = 3):
+    def __init__(self, max_concurrent: int = 3, enforce_workflow: bool = True):
         self.max_concurrent = max_concurrent
+        self.enforce_workflow = enforce_workflow
         self.active_sessions: dict[str, ClaudeInteractiveSession] = {}
 
     async def execute_task(
@@ -183,10 +221,10 @@ class ClaudeSessionPool:
         task_id: str,
         description: str,
         workspace: Path,
-        bot_repo_path: Optional[str] = None,
+        bot_repo_path: str | None = None,
         model: str = "sonnet",
-        pid_callback: Optional[callable] = None
-    ) -> tuple[bool, str, Optional[int]]:
+        pid_callback: callable | None = None,
+    ) -> tuple[bool, str, int | None]:
         """Execute a task using session pool
 
         Args:
@@ -201,8 +239,8 @@ class ClaudeSessionPool:
         while len(self.active_sessions) >= self.max_concurrent:
             await asyncio.sleep(1)
 
-        # Create session with specified workspace
-        session = ClaudeInteractiveSession(workspace, model)
+        # Create session with specified workspace and workflow enforcement
+        session = ClaudeInteractiveSession(workspace, model, enforce_workflow=self.enforce_workflow)
         session.task_id = task_id
         self.active_sessions[task_id] = session
 
@@ -236,12 +274,19 @@ Structure:
 
 Use your natural language understanding to determine if the user wants you to modify your own code or work on a different project."""
 
+            # Add workflow enforcement context
+            workflow_context = ""
+            if self.enforce_workflow and session.workflow_enforcer:
+                workflow_context = session.workflow_enforcer.get_workflow_prompt_context()
+
             prompt = f"""{bot_context}
 
 User request: {description}
 
 Working directory: {workspace}
 You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
+
+{workflow_context}
 
 Complete the task and provide a concise summary of what you did."""
 
@@ -251,10 +296,24 @@ Complete the task and provide a concise summary of what you did."""
             # Cleanup
             await session.terminate()
 
-            if response:
-                return True, response, pid
-            else:
+            if not response:
                 return False, "No response from Claude", pid
+
+            # Enforce workflow if enabled
+            workflow_result = ""
+            if self.enforce_workflow and session.workflow_enforcer:
+                logger.info(f"Enforcing workflow for task {task_id}")
+                success, workflow_msg = session.workflow_enforcer.enforce_workflow(description)
+
+                workflow_result = f"\n\n{'='*60}\nWORKFLOW ENFORCEMENT\n{'='*60}\n{workflow_msg}\n"
+
+                if not success:
+                    logger.warning(f"Workflow enforcement failed for task {task_id}")
+                    return False, response + workflow_result, pid
+                else:
+                    logger.info(f"Workflow enforcement passed for task {task_id}")
+
+            return True, response + workflow_result, pid
 
         except Exception as e:
             logger.error(f"Task execution error: {e}")
