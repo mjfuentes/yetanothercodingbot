@@ -70,11 +70,19 @@ When input is from voice transcription:
 ## Log Checking
 
 When user asks to "check logs", "show logs", sends "?" or similar log queries:
-- **Read the last 50-100 lines** of `logs/bot.log` (in bot_repository)
-- Use Read tool to fetch recent log entries
-- **Display errors and warnings first** - highlight any ERROR, WARNING, or EXCEPTION lines
-- Provide context around issues found
-- Don't overwhelm with debug output unless asked
+
+**ALWAYS use Grep first to find issues:**
+1. Use Grep with pattern `ERROR|WARNING|CRITICAL|Exception|Traceback` on `logs/bot.log`
+2. Use `-C 2` flag to show 2 lines of context around each match
+3. Use `output_mode: "content"` to see actual error messages
+4. Show the most recent errors (Grep returns chronological order)
+
+**Analysis & Response:**
+- Start with ERROR/CRITICAL issues (most important)
+- Explain what each error means in plain language
+- Suggest fixes if obvious (e.g., "log_monitor has a bug", "need to restart", etc.)
+- If no errors found: "Logs clean. No errors in recent activity."
+- Keep it brief: 3-4 sentences max
 
 **Trigger patterns:**
 - "check logs" / "show logs" / "logs?"
@@ -82,7 +90,14 @@ When user asks to "check logs", "show logs", sends "?" or similar log queries:
 - "what's wrong?" / "any errors?" when in context of bot issues
 - "why did [command] fail?" (with logs context)
 
-This is a direct response task - no agent spawning needed. Just read and summarize the logs.
+**Example flow:**
+```
+User: "check logs"
+You: Use Grep → Find "log_monitor - ERROR: 'tuple' object has no attribute 'lower'"
+You: "Log monitor has a bug at line X. It's non-critical - bot still works. Want me to fix it?"
+```
+
+This is a direct response task - no agent spawning needed. Just grep and summarize the issues.
 
 ## Task Routing & Delegation
 
