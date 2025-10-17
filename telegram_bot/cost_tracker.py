@@ -8,7 +8,6 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +15,19 @@ logger = logging.getLogger(__name__)
 # Model pricing (per 1M tokens)
 PRICING = {
     "haiku": {
-        "input": 0.80,   # $0.80 per 1M input tokens
+        "input": 0.80,  # $0.80 per 1M input tokens
         "output": 4.00,  # $4.00 per 1M output tokens
     },
     "sonnet": {
-        "input": 3.00,   # $3 per 1M input tokens
-        "output": 15.00, # $15 per 1M output tokens
+        "input": 3.00,  # $3 per 1M input tokens
+        "output": 15.00,  # $15 per 1M output tokens
     },
 }
 
 # Default limits (can be overridden per user)
 DEFAULT_LIMITS = {
-    "daily": 100.0,    # $100/day
-    "monthly": 1000.0, # $1000/month
+    "daily": 100.0,  # $100/day
+    "monthly": 1000.0,  # $1000/month
 }
 
 # Warning threshold
@@ -38,6 +37,7 @@ WARNING_THRESHOLD = 0.8  # Warn at 80% of limit
 @dataclass
 class UsageRecord:
     """Single usage record"""
+
     timestamp: str
     model: str
     input_tokens: int
@@ -49,32 +49,39 @@ class UsageRecord:
 @dataclass
 class UserUsage:
     """User usage statistics"""
+
     user_id: int
     total_requests: int
     total_cost: float
     daily_cost: float
     monthly_cost: float
+    weekly_cost: float  # Weekly cost tracking
     records: list[UsageRecord]
     limits: dict  # Custom limits per user
     last_reset: str
-    last_warning: Optional[str] = None  # Timestamp of last warning
+    session_start: str | None = None  # When current session started
+    session_cost: float = 0.0  # Cost since session started
+    last_warning: str | None = None  # Timestamp of last warning
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'UserUsage':
-        records = [UsageRecord(**r) for r in data.get('records', [])]
+    def from_dict(cls, data: dict) -> "UserUsage":
+        records = [UsageRecord(**r) for r in data.get("records", [])]
         return cls(
-            user_id=data['user_id'],
-            total_requests=data['total_requests'],
-            total_cost=data['total_cost'],
-            daily_cost=data['daily_cost'],
-            monthly_cost=data['monthly_cost'],
+            user_id=data["user_id"],
+            total_requests=data["total_requests"],
+            total_cost=data["total_cost"],
+            daily_cost=data["daily_cost"],
+            monthly_cost=data["monthly_cost"],
+            weekly_cost=data.get("weekly_cost", 0.0),
             records=records,
-            limits=data.get('limits', DEFAULT_LIMITS.copy()),
-            last_reset=data['last_reset'],
-            last_warning=data.get('last_warning')
+            limits=data.get("limits", DEFAULT_LIMITS.copy()),
+            last_reset=data["last_reset"],
+            session_start=data.get("session_start"),
+            session_cost=data.get("session_cost", 0.0),
+            last_warning=data.get("last_warning"),
         )
 
 
@@ -85,7 +92,7 @@ class CostTracker:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
         self.usage_file = self.data_dir / "usage.json"
-        self.users: Dict[int, UserUsage] = {}
+        self.users: dict[int, UserUsage] = {}
 
         # Load existing usage data
         self._load_usage()
@@ -98,7 +105,7 @@ class CostTracker:
             return
 
         try:
-            with open(self.usage_file, 'r') as f:
+            with open(self.usage_file) as f:
                 data = json.load(f)
                 for user_id_str, usage_data in data.items():
                     user_id = int(user_id_str)
@@ -111,12 +118,9 @@ class CostTracker:
     def _save_usage(self):
         """Save usage data to disk"""
         try:
-            data = {
-                str(user_id): usage.to_dict()
-                for user_id, usage in self.users.items()
-            }
+            data = {str(user_id): usage.to_dict() for user_id, usage in self.users.items()}
 
-            with open(self.usage_file, 'w') as f:
+            with open(self.usage_file, "w") as f:
                 json.dump(data, f, indent=2)
 
         except Exception as e:
@@ -125,15 +129,19 @@ class CostTracker:
     def _get_or_create_usage(self, user_id: int) -> UserUsage:
         """Get or create usage record for user"""
         if user_id not in self.users:
+            now = datetime.now().isoformat()
             self.users[user_id] = UserUsage(
                 user_id=user_id,
                 total_requests=0,
                 total_cost=0.0,
                 daily_cost=0.0,
                 monthly_cost=0.0,
+                weekly_cost=0.0,
                 records=[],
                 limits=DEFAULT_LIMITS.copy(),
-                last_reset=datetime.now().isoformat()
+                last_reset=now,
+                session_start=now,
+                session_cost=0.0,
             )
             self._save_usage()
 
@@ -161,6 +169,20 @@ class CostTracker:
             usage.last_reset = now.isoformat()
             logger.info(f"Reset monthly costs for user {usage.user_id}")
 
+    def _reset_weekly_costs(self, usage: UserUsage):
+        """Reset weekly costs if needed"""
+        last_reset = datetime.fromisoformat(usage.last_reset)
+        now = datetime.now()
+
+        # Reset if we're in a new week (Monday-based)
+        last_week = last_reset.isocalendar()[:2]  # (year, week)
+        current_week = now.isocalendar()[:2]
+
+        if last_week < current_week:
+            usage.weekly_cost = 0.0
+            usage.last_reset = now.isoformat()
+            logger.info(f"Reset weekly costs for user {usage.user_id}")
+
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count from text (rough approximation)"""
         # Rough estimate: ~4 characters per token for English text
@@ -179,12 +201,7 @@ class CostTracker:
         return input_cost + output_cost
 
     def record_usage(
-        self,
-        user_id: int,
-        model: str,
-        input_tokens: int,
-        output_tokens: int,
-        request_type: str = "chat"
+        self, user_id: int, model: str, input_tokens: int, output_tokens: int, request_type: str = "chat"
     ) -> float:
         """Record API usage and return cost"""
         usage = self._get_or_create_usage(user_id)
@@ -192,6 +209,7 @@ class CostTracker:
         # Reset periods if needed
         self._reset_daily_costs(usage)
         self._reset_monthly_costs(usage)
+        self._reset_weekly_costs(usage)
 
         # Calculate cost
         cost = self.calculate_cost(model, input_tokens, output_tokens)
@@ -203,7 +221,7 @@ class CostTracker:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost=cost,
-            request_type=request_type
+            request_type=request_type,
         )
 
         # Update usage
@@ -212,6 +230,8 @@ class CostTracker:
         usage.total_cost += cost
         usage.daily_cost += cost
         usage.monthly_cost += cost
+        usage.weekly_cost += cost
+        usage.session_cost += cost
 
         # Keep only last 1000 records
         if len(usage.records) > 1000:
@@ -223,7 +243,7 @@ class CostTracker:
 
         return cost
 
-    def check_limits(self, user_id: int) -> tuple[bool, Optional[str]]:
+    def check_limits(self, user_id: int) -> tuple[bool, str | None]:
         """
         Check if user is within limits
         Returns: (allowed, warning_message)
@@ -268,6 +288,14 @@ class CostTracker:
 
         return True, warning_msg
 
+    def reset_session(self, user_id: int):
+        """Reset session tracking (called when user starts new session)"""
+        usage = self._get_or_create_usage(user_id)
+        usage.session_start = datetime.now().isoformat()
+        usage.session_cost = 0.0
+        self._save_usage()
+        logger.info(f"Reset session for user {user_id}")
+
     def get_usage_stats(self, user_id: int) -> dict:
         """Get usage statistics for user"""
         usage = self._get_or_create_usage(user_id)
@@ -275,17 +303,13 @@ class CostTracker:
         # Reset periods if needed
         self._reset_daily_costs(usage)
         self._reset_monthly_costs(usage)
+        self._reset_weekly_costs(usage)
 
         # Calculate model breakdown
         model_stats = {}
         for record in usage.records:
             if record.model not in model_stats:
-                model_stats[record.model] = {
-                    "requests": 0,
-                    "cost": 0.0,
-                    "input_tokens": 0,
-                    "output_tokens": 0
-                }
+                model_stats[record.model] = {"requests": 0, "cost": 0.0, "input_tokens": 0, "output_tokens": 0}
             model_stats[record.model]["requests"] += 1
             model_stats[record.model]["cost"] += record.cost
             model_stats[record.model]["input_tokens"] += record.input_tokens
@@ -293,10 +317,18 @@ class CostTracker:
 
         # Recent activity (last 24 hours)
         now = datetime.now()
-        recent_records = [
-            r for r in usage.records
-            if (now - datetime.fromisoformat(r.timestamp)) < timedelta(hours=24)
-        ]
+        recent_records = [r for r in usage.records if (now - datetime.fromisoformat(r.timestamp)) < timedelta(hours=24)]
+
+        # Calculate session duration
+        session_duration = None
+        if usage.session_start:
+            session_start_dt = datetime.fromisoformat(usage.session_start)
+            duration = datetime.now() - session_start_dt
+            hours = duration.total_seconds() / 3600
+            if hours < 1:
+                session_duration = f"{int(duration.total_seconds() / 60)}m"
+            else:
+                session_duration = f"{hours:.1f}h"
 
         return {
             "user_id": user_id,
@@ -304,16 +336,19 @@ class CostTracker:
             "total_cost": usage.total_cost,
             "daily_cost": usage.daily_cost,
             "monthly_cost": usage.monthly_cost,
+            "weekly_cost": usage.weekly_cost,
+            "session_cost": usage.session_cost,
+            "session_duration": session_duration,
             "daily_limit": usage.limits["daily"],
             "monthly_limit": usage.limits["monthly"],
             "daily_percentage": (usage.daily_cost / usage.limits["daily"]) * 100,
             "monthly_percentage": (usage.monthly_cost / usage.limits["monthly"]) * 100,
             "model_breakdown": model_stats,
             "recent_24h": len(recent_records),
-            "last_reset": usage.last_reset
+            "last_reset": usage.last_reset,
         }
 
-    def set_user_limits(self, user_id: int, daily: Optional[float] = None, monthly: Optional[float] = None):
+    def set_user_limits(self, user_id: int, daily: float | None = None, monthly: float | None = None):
         """Set custom limits for a user"""
         usage = self._get_or_create_usage(user_id)
 
@@ -323,4 +358,6 @@ class CostTracker:
             usage.limits["monthly"] = monthly
 
         self._save_usage()
-        logger.info(f"Updated limits for user {user_id}: daily=${usage.limits['daily']}, monthly=${usage.limits['monthly']}")
+        logger.info(
+            f"Updated limits for user {user_id}: daily=${usage.limits['daily']}, monthly=${usage.limits['monthly']}"
+        )
