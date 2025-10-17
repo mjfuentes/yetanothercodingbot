@@ -20,40 +20,97 @@ Telegram Bot (main.py)
 Orchestrator Integration (orchestrator.py)
     ↓ Invokes claude chat
 Claude Code Orchestrator Agent (.claude/agents/orchestrator.md)
-    ↓ Uses Task tool to spawn
-Code Worker Agent (.claude/agents/code_worker.md)
-    ↓ Returns result
+    ├─ Direct response (Q&A, explanations)
+    │
+    ├─ Task: Spawn Research Worker (.claude/agents/research_worker.md)
+    │   ↓ Returns Markdown proposal
+    │   ↓ Orchestrator displays proposal
+    │   ↓ User approves/rejects/refines
+    │   ↓
+    │   └─ If approved: Spawn Code Worker
+    │
+    └─ Task: Spawn Code Worker (.claude/agents/code_worker.md)
+       ├─ Direct coding task
+       └─ Implement approved proposal
+       ↓ Returns result
 Orchestrator composes response
     ↓
-Bot sends to user
+Bot sends to user (with proposal display or implementation summary)
 ```
+
+## Research-to-Implementation Workflow
+
+The new research_worker enables a two-phase improvement process:
+
+### Phase 1: Research & Proposal
+1. User requests improvements: "improve error handling", "better architecture", etc.
+2. Orchestrator recognizes research request
+3. Orchestrator spawns research_worker with Task tool
+4. research_worker analyzes codebase, generates Markdown proposal
+5. Orchestrator displays proposal to user in chat
+
+### Phase 2: Approval & Implementation
+6. User reviews proposal (or refines request)
+7. User indicates approval: "looks good", "approve", "do it", etc.
+8. Orchestrator recognizes approval in conversation history
+9. Orchestrator spawns code_worker with proposal as context
+10. code_worker implements changes from proposal
+11. Orchestrator displays implementation summary
+
+This workflow prevents implementing changes the user didn't specifically approve.
 
 ## Key Components
 
 ### 1. Orchestrator Agent (`.claude/agents/orchestrator.md`)
 
-**Role**: Router and analyzer - handles ALL user interactions except code execution
+**Role**: Router and analyzer - handles ALL user interactions and agent spawning
 
 **Can Do**:
 - Answer questions and provide explanations
 - Read and analyze files (Read, Glob, Grep)
 - Route coding tasks to code_worker via Task tool
+- Route analysis/improvement requests to research_worker via Task tool
 - Compose conversational responses
 - Handle voice input with transcription error tolerance
+- Track pending proposals for approval/implementation
 
-**Cannot Do** (Must spawn code_worker):
-- Create/write files
-- Edit files
-- Run bash commands
-- Execute git operations
+**Cannot Do** (Must spawn agents):
+- Create/write files → Spawn code_worker
+- Edit files → Spawn code_worker
+- Run bash commands → Spawn code_worker
+- Execute git operations → Spawn code_worker
+- Propose refactoring → Spawn research_worker first
 
 **Tools**: Task, Read, Glob, Grep
 
 **Output**: Plain text user-facing message
 
-**Spawning code_worker**: Uses Task tool with `subagent_type="code_worker"`
+**Spawning agents**: Uses Task tool with `subagent_type="code_worker"` or `subagent_type="research_worker"`
 
-### 2. Code Worker Agent (`.claude/agents/code_worker.md`)
+### 2. Research Worker Agent (`.claude/agents/research_worker.md`)
+
+**Role**: Analyzes codebase and proposes improvements without implementing
+
+**Responsibilities**:
+- Analyze existing code patterns and architecture
+- Identify improvement opportunities
+- Generate detailed proposals as Markdown documents
+- Provide concrete code examples (current vs. proposed)
+- Estimate effort and prioritize changes
+- **Do NOT implement changes**
+
+**Tools**: Read, Glob, Grep (analysis only)
+
+**Spawned by**: Orchestrator when user requests:
+- "improve X" / "better architecture" / "refactor"
+- "propose changes" / "suggest improvements"
+- "optimize performance" / "review security"
+
+**Output**: Markdown proposal document for user review
+
+**Next Step**: If user approves proposal, orchestrator spawns code_worker to implement
+
+### 3. Code Worker Agent (`.claude/agents/code_worker.md`)
 
 **Role**: Executes all file operations and code changes
 
@@ -66,7 +123,9 @@ Bot sends to user
 
 **Tools**: Read, Write, Edit, Glob, Grep, Bash
 
-**Spawned by**: Orchestrator via Task tool
+**Spawned by**: Orchestrator via Task tool for:
+- Direct coding tasks: "fix bug in X", "add feature Y"
+- Implementation of approved proposals: Receives proposal as context
 
 **Key Policy**: Always commits changes after modifications
 
@@ -206,15 +265,33 @@ Benefits:
 7. Orchestrator composes user-facing response
 8. Bot sends response to user
 
-### Logging Code_worker Spawning
+### Logging Code_worker and research_worker Spawning
 
 When testing, check bot logs for:
 ```
 INFO: Invoking orchestrator agent for: [user query]
 DEBUG: [Claude Code loading orchestrator agent]
-INFO: [code_worker spawned if task used]
+INFO: [research_worker spawned for analysis requests]
+INFO: [code_worker spawned for coding tasks]
 INFO: Orchestrator response: [result]
 ```
+
+## Proposal Tracking
+
+The orchestrator maintains context across turns to track proposals:
+
+**Proposal State**:
+- `pending`: Proposal displayed, awaiting user decision
+- `approved`: User approved, implementation spawning
+- `rejected`: User rejected, ready to refine
+
+**How it works**:
+1. research_worker returns proposal → stored in conversation context
+2. Orchestrator recognizes approval keywords in next user message
+3. If approved: Spawn code_worker with proposal context
+4. If rejected: Discuss refinements, optionally re-run research_worker
+
+**Approval Keywords**: "approve", "looks good", "do it", "go ahead", "yes", "implement", etc.
 
 ## Testing Checklist
 
@@ -224,7 +301,9 @@ INFO: Orchestrator response: [result]
 - [ ] Other repo: "in ~/myproject, fix bug in app.py" (code_worker in specified workspace)
 - [ ] Voice input: "add a logging function" (permissive with errors)
 - [ ] Background task: "refactor the entire authentication system" (BACKGROUND_TASK format)
-- [ ] Check logs show code_worker being spawned for appropriate tasks
+- [ ] Research request: "improve the error handling" (Task tool spawns research_worker)
+- [ ] Research approval: User says "approve" after seeing proposal (Task tool spawns code_worker)
+- [ ] Check logs show correct agents being spawned
 
 ## Future Enhancements
 
@@ -291,24 +370,63 @@ code_worker: Adds logging in groovetherapy project
 Bot: "Added logging to the groovetherapy project"
 ```
 
-## Refactoring Summary (October 17, 2025)
+### Example 6: Research & Proposal (Two-Phase Workflow)
+```
+User: "improve the error handling in the auth system"
+Bot: Orchestrator spawns research_worker via Task tool
+research_worker: Analyzes auth.py, identifies current error patterns, proposes retry logic, custom exceptions, structured logging
+Orchestrator: Displays proposal in chat:
+    Bot: "[Markdown proposal showing current code vs. proposed improvements]"
+User: "looks good"
+Bot: Orchestrator recognizes approval, spawns code_worker with proposal context
+code_worker: Implements all proposed changes, commits with "Improve error handling: add retry logic, custom exceptions, structured logging"
+Orchestrator: Composes response
+Bot: "Done. Improved error handling with retry logic, custom exceptions, and structured logging."
+```
 
-**What Changed**:
+### Example 7: Refine Proposal Before Implementation
+```
+User: "better architecture for the API"
+Bot: Orchestrator spawns research_worker
+research_worker: Analyzes API structure, proposes modularization and middleware improvements
+Orchestrator: Displays proposal
+User: "good but skip the middleware part"
+Bot: Orchestrator refines and respawns research_worker with refined scope
+research_worker: Returns updated proposal without middleware changes
+Orchestrator: Displays updated proposal
+User: "approve"
+Bot: Orchestrator spawns code_worker with refined proposal
+code_worker: Implements refined changes
+Bot: "Done. Refactored API with better modularization."
+```
+
+## Refactoring Summary (October 17, 2025 + Research Worker Enhancement)
+
+**Phase 1 - Proper Separation of Concerns** (October 17, 2025):
 1. Orchestrator no longer handles file writes or bash execution
 2. Orchestrator spawns code_worker via Task tool for coding tasks
 3. Added clear routing logic: Direct response, code_worker task, or background task
 4. code_worker now commits changes automatically
 
+**Phase 2 - Two-Phase Approval Workflow** (New):
+5. Added research_worker for analysis and proposals without implementation
+6. Orchestrator can spawn research_worker for improvement requests
+7. Proposal-approval workflow prevents unintended changes
+8. Two-phase process: Research → Display Proposal → Approval → Implement
+
 **Benefits**:
 - Clear separation of concerns
-- Orchestrator focuses on routing and Q&A
+- Orchestrator focuses on routing and agent management
+- research_worker handles analysis and proposals (Read-only)
 - code_worker handles all state changes
+- Users can review proposals before implementation
 - Easier to test and maintain
 - Better error handling per agent
-- Logs clearly show code_worker being spawned
+- Logs clearly show which agents are spawned
 
 **Files Modified**:
-- `.claude/agents/orchestrator.md` - Updated with routing strategy and Task tool usage
-- `.claude/agents/code_worker.md` - Added Git Commit Policy
-- `telegram_bot/orchestrator.py` - Updated prompt to guide proper routing
-- `AGENT_ARCHITECTURE.md` - Documented new architecture
+- `.claude/agents/orchestrator.md` - Updated with research_worker routing and workflow
+- `.claude/agents/code_worker.md` - Added Git Commit Policy (unchanged)
+- `.claude/agents/research_worker.md` - NEW: Analysis and proposal agent
+- `telegram_bot/orchestrator.py` - Infrastructure ready for proposals (no changes needed yet)
+- `AGENT_ARCHITECTURE.md` - Documented new research_worker and two-phase workflow
