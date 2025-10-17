@@ -182,45 +182,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 welcome_message += f"• {parts[1]}\n"
         welcome_message += "\n"
 
-    welcome_message += "Send me a message or /help to see what I can do!"
+    welcome_message += "Send me a message to get started!"
 
     await update.message.reply_text(welcome_message, parse_mode="HTML")
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command - priority command that executes immediately"""
-    if not await check_authorization(update):
-        return
-
-    logger.info(f"Priority /help: User {update.effective_user.id}")
-
-    help_text = """
-<b>Commands</b>
-/status - Active tasks & errors
-/usage - Detailed API costs
-/retry - Retry failed tasks
-/stop - Stop a running task
-/start - Fresh conversation
-/clear - Reset history
-/clear errors - Clear all failed tasks
-
-<b>What I can do</b>
-• Answer questions &amp; explain concepts
-• Code: create, fix, refactor, generate tests
-• Multi-repo: "in ~/path, do X"
-• Analyze files, PDFs, images
-• Transcribe voice messages
-• Complex tasks run in background
-
-<b>Rate Limits</b>
-30 req/min, 500 req/hour
-Use /usage to check spending
-
-<b>Note</b>
-/status auto-clears errors older than 24h
-    """
-
-    await update.message.reply_text(help_text, parse_mode="HTML")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -555,7 +519,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def is_priority_command(message_text: str) -> bool:
     """
     Check if message is a priority command that should bypass the queue.
-    Priority commands: /restart, /start, /clear, /help
+    Priority commands: /restart, /start, /clear
 
     These need immediate execution even if bot is processing something.
     """
@@ -563,7 +527,7 @@ def is_priority_command(message_text: str) -> bool:
         return False
 
     text_lower = message_text.lower().strip()
-    priority_commands = ["/restart", "restart", "/start", "start", "/clear", "clear", "/help", "help"]
+    priority_commands = ["/restart", "restart", "/start", "start", "/clear", "clear"]
 
     return any(text_lower == cmd or text_lower.startswith(cmd + " ") for cmd in priority_commands)
 
@@ -1470,7 +1434,6 @@ def main():
         await app.bot.set_my_commands(
             [
                 BotCommand("start", "Start fresh (clears history)"),
-                BotCommand("help", "Get help"),
                 BotCommand("status", "Active tasks & errors"),
                 BotCommand("usage", "Show detailed API usage & costs"),
                 BotCommand("retry", "Retry failed tasks"),
@@ -1643,7 +1606,6 @@ def main():
 
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("retry", retry_command))
