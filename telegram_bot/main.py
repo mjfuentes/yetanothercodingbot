@@ -314,13 +314,34 @@ Rate Limits
     if rate_stats["in_cooldown"]:
         message += f"\n• Cooldown: {rate_stats['cooldown_remaining']}s remaining"
 
-    # Add model breakdown if available
+    # Add model breakdown if available with enhanced display
     if cost_stats["model_breakdown"]:
-        message += "\n\nBy Model\n"
-        for model, stats in cost_stats["model_breakdown"].items():
-            message += f"• {model}: {stats['requests']} requests (${stats['cost']:.4f})\n"
+        message += "\n\nBy Model"
+        # Sort by cost (descending) for better visibility
+        sorted_models = sorted(cost_stats["model_breakdown"].items(), key=lambda x: x[1]["cost"], reverse=True)
 
-    message += f"\n\nLast reset: {cost_stats['last_reset'][:19]}"
+        for model, stats in sorted_models:
+            # Calculate token totals
+            total_tokens = stats["input_tokens"] + stats["output_tokens"]
+            avg_tokens_per_req = total_tokens / stats["requests"] if stats["requests"] > 0 else 0
+
+            # Format model name for display
+            model_display = model.capitalize()
+
+            message += f"\n• {model_display}: {stats['requests']} requests, ${stats['cost']:.4f}"
+            message += (
+                f"\n  └─ Tokens: {stats['input_tokens']:,} in + {stats['output_tokens']:,} out = {total_tokens:,} total"
+            )
+            message += f"\n  └─ Avg per request: {avg_tokens_per_req:,.0f} tokens"
+
+    # Add pricing info footer
+    message += f"""
+
+Pricing Info
+• Haiku 4.5: $0.80/1M input, $4.00/1M output
+• Sonnet 4.5: $3.00/1M input, $15.00/1M output
+
+Last reset: {cost_stats['last_reset'][:19]}"""
 
     # Format and send using HTML formatter
     formatted_chunks = format_telegram_response(message, max_length=4000)

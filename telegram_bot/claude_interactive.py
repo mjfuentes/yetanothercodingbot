@@ -7,6 +7,7 @@ Enhanced with workflow enforcement for testing and commits
 import asyncio
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from workflow_enforcer import WorkflowEnforcer
@@ -223,7 +224,7 @@ class ClaudeSessionPool:
         workspace: Path,
         bot_repo_path: str | None = None,
         model: str = "sonnet",
-        pid_callback: callable | None = None,
+        pid_callback: Callable[[int], None] | None = None,
     ) -> tuple[bool, str, int | None]:
         """Execute a task using session pool
 
