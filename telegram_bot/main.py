@@ -531,6 +531,21 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Exiting for restart...")
         import os
 
+        # Kill monitoring server before restarting bot
+        try:
+            # Find and kill monitoring server process
+            result = subprocess.run(["pgrep", "-f", "monitoring_server.py"], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    try:
+                        subprocess.run(["kill", pid], check=False)
+                        logger.info(f"Killed monitoring server PID {pid}")
+                    except Exception as e:
+                        logger.warning(f"Failed to kill monitoring server PID {pid}: {e}")
+        except Exception as e:
+            logger.warning(f"Error stopping monitoring server: {e}")
+
         # Flush logs before exit
         for handler in logging.root.handlers:
             handler.flush()

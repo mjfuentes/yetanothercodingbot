@@ -104,6 +104,42 @@
             box-shadow: 0 4px 12px var(--shadow);
         }
 
+        .auto-refresh-status {
+            position: fixed;
+            top: 1.25rem;
+            right: 1.25rem;
+            background: var(--bg-secondary);
+            padding: 0.625rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.875rem;
+            box-shadow: 0 4px 12px var(--shadow);
+        }
+
+        .auto-refresh-status.updating {
+            display: none;
+        }
+
+        .refresh-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .refresh-toggle input {
+            cursor: pointer;
+        }
+
+        .refresh-countdown {
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
         .spinner {
             width: 14px;
             height: 14px;
@@ -324,26 +360,6 @@
             padding: 1.5rem;
         }
 
-        .chart-container {
-            grid-column: 1 / -1;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 0.5rem;
-            padding: 1.25rem;
-            min-height: 400px;
-        }
-
-        .chart-title {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
-        }
-
-        #chart {
-            width: 100%;
-            height: 350px;
-        }
-
         .loading {
             text-align: center;
             padding: 2rem;
@@ -376,7 +392,8 @@
             <button class="btn active" onclick="setTimeRange(24)">24 Hours</button>
             <button class="btn" onclick="setTimeRange(168)">7 Days</button>
             <button class="btn" onclick="setTimeRange(720)">30 Days</button>
-            <button class="btn" onclick="refreshData()">Refresh</button>
+            <button class="btn" onclick="refreshData()">Refresh Now</button>
+            <a href="/telegram" target="_blank" class="btn" style="margin-left: auto;">💬 Open Telegram</a>
         </div>
 
         <div class="refresh-indicator" id="refreshIndicator">
@@ -384,23 +401,28 @@
             <span>Updating...</span>
         </div>
 
+        <div class="auto-refresh-status" id="autoRefreshStatus">
+            <label class="refresh-toggle">
+                <input type="checkbox" id="autoRefreshToggle" checked onchange="toggleAutoRefresh()">
+                <span>Auto-refresh</span>
+            </label>
+            <span class="refresh-countdown" id="refreshCountdown">30s</span>
+        </div>
+
         <div class="grid" id="metricsGrid">
             <div class="card">
                 <div class="loading">Loading metrics...</div>
             </div>
         </div>
-
-        <div class="chart-container">
-            <h2 class="chart-title">Activity Timeline</h2>
-            <canvas id="chart"></canvas>
-        </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script>
         let currentTimeRange = 24;
-        let chart = null;
         let refreshInterval = null;
+        let countdownInterval = null;
+        let autoRefreshEnabled = true;
+        let nextRefreshTime = null;
+        const REFRESH_INTERVAL_MS = 30000; // 30 seconds
 
         document.addEventListener('DOMContentLoaded', () => {
             loadMetrics();
@@ -421,8 +443,11 @@
                 const response = await fetch(`/api/metrics/overview?hours=${currentTimeRange}`);
                 const data = await response.json();
 
-                renderMetrics(data);
-                await renderChart();
+                // Also fetch Usage API data
+                const usageApiResponse = await fetch('/api/metrics/usage-api');
+                const usageApiData = await usageApiResponse.json();
+
+                renderMetrics(data, usageApiData);
             } catch (error) {
                 console.error('Error loading metrics:', error);
                 showError('Failed to load metrics. Please try again.');
@@ -431,14 +456,53 @@
             }
         }
 
-        function renderMetrics(data) {
+        function renderMetrics(data, usageApiData) {
             const grid = document.getElementById('metricsGrid');
 
+            // Build Usage API card if configured
+            let usageApiCard = '';
+            if (usageApiData && usageApiData.configured) {
+                usageApiCard = `
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-icon" style="background: rgba(236, 72, 153, 0.15); color: #ec4899;">🔗</div>
+                            <h2 class="card-title">Anthropic Usage API</h2>
+                        </div>
+                        <div class="metrics">
+                            <div class="metric">
+                                <span class="metric-label">Total Cost (Month)</span>
+                                <span class="metric-value value-cost">$${usageApiData.total_cost.toFixed(2)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Total Tokens</span>
+                                <span class="metric-value">${(usageApiData.total_tokens / 1000000).toFixed(2)}M</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Input Tokens</span>
+                                <span class="metric-value">${(usageApiData.total_input_tokens / 1000000).toFixed(2)}M</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Output Tokens</span>
+                                <span class="metric-value">${(usageApiData.total_output_tokens / 1000000).toFixed(2)}M</span>
+                            </div>
+                            ${usageApiData.total_cached_tokens > 0 ? `
+                            <div class="metric">
+                                <span class="metric-label">Cached Tokens</span>
+                                <span class="metric-value">${(usageApiData.total_cached_tokens / 1000000).toFixed(2)}M</span>
+                            </div>
+                            ` : ''}
+                        </div>
+                        ${renderUsageApiModels(usageApiData.model_breakdown)}
+                    </div>
+                `;
+            }
+
             grid.innerHTML = `
+                ${usageApiCard}
                 <div class="card">
                     <div class="card-header">
                         <div class="card-icon icon-api">API</div>
-                        <h2 class="card-title">Claude API Usage</h2>
+                        <h2 class="card-title">Local Tracking</h2>
                     </div>
                     <div class="metrics">
                         <div class="metric">
@@ -530,6 +594,29 @@
             `;
         }
 
+        function renderUsageApiModels(models) {
+            if (!models || Object.keys(models).length === 0) {
+                return '';
+            }
+
+            return `
+                <div class="model-breakdown">
+                    ${Object.entries(models).map(([model, stats]) => `
+                        <div class="model-item">
+                            <div class="model-header">
+                                <span class="model-name">${model}</span>
+                            </div>
+                            <div class="model-details">
+                                <div>${(stats.input_tokens / 1000).toFixed(0)}K in</div>
+                                <div>${(stats.output_tokens / 1000).toFixed(0)}K out</div>
+                                ${stats.cached_tokens > 0 ? `<div>${(stats.cached_tokens / 1000).toFixed(0)}K cached</div>` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
         function renderModelBreakdown(models) {
             if (!models || Object.keys(models).length === 0) {
                 return '<div class="no-data">No data available</div>';
@@ -584,124 +671,73 @@
             `).join('');
         }
 
-        async function renderChart() {
-            try {
-                const response = await fetch(`/api/metrics/timeseries?hours=${currentTimeRange}&interval=60`);
-                const timeseriesData = await response.json();
+        function startAutoRefresh() {
+            if (!autoRefreshEnabled) return;
 
-                const ctx = document.getElementById('chart').getContext('2d');
+            // Clear any existing intervals
+            if (refreshInterval) clearInterval(refreshInterval);
+            if (countdownInterval) clearInterval(countdownInterval);
 
-                if (chart) {
-                    chart.destroy();
-                }
+            // Set next refresh time
+            nextRefreshTime = Date.now() + REFRESH_INTERVAL_MS;
 
-                chart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: timeseriesData.data_points.map(d => {
-                            const date = new Date(d.timestamp);
-                            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                        }),
-                        datasets: [
-                            {
-                                label: 'API Requests',
-                                data: timeseriesData.data_points.map(d => d.requests),
-                                borderColor: '#3b82f6',
-                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                                tension: 0.4,
-                                fill: true,
-                                borderWidth: 2
-                            },
-                            {
-                                label: 'Tasks Completed',
-                                data: timeseriesData.data_points.map(d => d.tasks_completed),
-                                borderColor: '#10b981',
-                                backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                                tension: 0.4,
-                                fill: true,
-                                borderWidth: 2
-                            },
-                            {
-                                label: 'Tasks Failed',
-                                data: timeseriesData.data_points.map(d => d.tasks_failed),
-                                borderColor: '#ef4444',
-                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                                tension: 0.4,
-                                fill: true,
-                                borderWidth: 2
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                position: 'top',
-                                labels: {
-                                    color: '#e4e6eb',
-                                    padding: 15,
-                                    font: {
-                                        size: 12
-                                    }
-                                }
-                            },
-                            tooltip: {
-                                mode: 'index',
-                                intersect: false,
-                                backgroundColor: '#1e2430',
-                                titleColor: '#e4e6eb',
-                                bodyColor: '#a8adb7',
-                                borderColor: '#2d3748',
-                                borderWidth: 1,
-                                padding: 12,
-                                displayColors: true
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                ticks: {
-                                    precision: 0,
-                                    color: '#a8adb7'
-                                },
-                                grid: {
-                                    color: '#2d3748',
-                                    drawBorder: false
-                                }
-                            },
-                            x: {
-                                ticks: {
-                                    color: '#a8adb7',
-                                    maxRotation: 0
-                                },
-                                grid: {
-                                    color: '#2d3748',
-                                    drawBorder: false
-                                }
-                            }
-                        }
-                    }
-                });
-            } catch (error) {
-                console.error('Error rendering chart:', error);
+            // Start refresh interval
+            refreshInterval = setInterval(() => {
+                loadMetrics();
+                nextRefreshTime = Date.now() + REFRESH_INTERVAL_MS;
+            }, REFRESH_INTERVAL_MS);
+
+            // Start countdown display
+            updateCountdown();
+            countdownInterval = setInterval(updateCountdown, 1000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+            document.getElementById('refreshCountdown').textContent = '--';
+        }
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = document.getElementById('autoRefreshToggle').checked;
+
+            if (autoRefreshEnabled) {
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
             }
         }
 
-        function startAutoRefresh() {
-            refreshInterval = setInterval(loadMetrics, 30000);
+        function updateCountdown() {
+            if (!autoRefreshEnabled || !nextRefreshTime) return;
+
+            const remaining = Math.max(0, Math.ceil((nextRefreshTime - Date.now()) / 1000));
+            document.getElementById('refreshCountdown').textContent = `${remaining}s`;
         }
 
         function refreshData() {
             loadMetrics();
+            // Reset countdown after manual refresh
+            if (autoRefreshEnabled) {
+                nextRefreshTime = Date.now() + REFRESH_INTERVAL_MS;
+                updateCountdown();
+            }
         }
 
         function showRefreshIndicator() {
             document.getElementById('refreshIndicator').style.display = 'flex';
+            document.getElementById('autoRefreshStatus').classList.add('updating');
         }
 
         function hideRefreshIndicator() {
             document.getElementById('refreshIndicator').style.display = 'none';
+            document.getElementById('autoRefreshStatus').classList.remove('updating');
         }
 
         function showError(message) {

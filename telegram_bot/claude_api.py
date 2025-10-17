@@ -38,7 +38,7 @@ async def ask_claude(
     context = {
         "user_query": user_query,
         "input_method": input_method,
-        "conversation_history": conversation_history[-1:],  # Last 1 message only
+        "conversation_history": conversation_history[-2:],  # Last 2 messages
         "current_workspace": current_workspace or workspace_path,
         "bot_repository": bot_repository,
         # Only include active tasks if there are any

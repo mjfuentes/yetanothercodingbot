@@ -6,11 +6,10 @@
     <key>Label</key>
     <string>com.agentlab.telegrambot</string>
 
-    <!-- Path to Python in virtual environment -->
+    <!-- Path to startup script that launches bot + monitoring server -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/matifuentes/Workspace/agentlab/venv/bin/python</string>
-        <string>/Users/matifuentes/Workspace/agentlab/telegram_bot/main.py</string>
+        <string>/Users/matifuentes/Workspace/agentlab/start_services.sh</string>
     </array>
 
     <!-- Working directory -->

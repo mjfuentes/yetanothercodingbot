@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Web - AgentLab Bot</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #151922;
+            --text-primary: #e4e6eb;
+            --text-secondary: #a8adb7;
+            --accent-blue: #3b82f6;
+            --border-color: #2d3748;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent-blue), #8b5cf6);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .subtitle {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-left: 1rem;
+        }
+
+        .header-right {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .telegram-container {
+            width: 100%;
+            height: calc(100vh - 73px);
+            position: relative;
+            background: var(--bg-primary);
+        }
+
+        .telegram-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid var(--bg-secondary);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .info-banner {
+            background: rgba(59, 130, 246, 0.1);
+            border-bottom: 1px solid rgba(59, 130, 246, 0.3);
+            padding: 0.75rem 1.5rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .info-icon {
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        @media (max-width: 768px) {
+            .subtitle {
+                display: none;
+            }
+
+            .header {
+                padding: 0.75rem 1rem;
+            }
+
+            h1 {
+                font-size: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <div class="logo">🤖</div>
+            <h1>Telegram Web</h1>
+            <span class="subtitle">AgentLab Bot Interface</span>
+        </div>
+        <div class="header-right">
+            <a href="/" class="btn">📊 Dashboard</a>
+            <button class="btn" onclick="reloadTelegram()">🔄 Reload</button>
+        </div>
+    </div>
+
+    <div class="info-banner">
+        <span class="info-icon">ℹ️</span>
+        <span>This is Telegram Web embedded. Log in to interact with your AgentLab bot.</span>
+    </div>
+
+    <div class="telegram-container">
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Loading Telegram Web...</p>
+        </div>
+        <iframe
+            id="telegramIframe"
+            class="telegram-iframe"
+            src="https://web.telegram.org/k/"
+            allow="microphone; camera; geolocation"
+            sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
+            onload="hideLoading()"
+        ></iframe>
+    </div>
+
+    <script>
+        function hideLoading() {
+            const loading = document.getElementById('loading');
+            if (loading) {
+                loading.style.display = 'none';
+            }
+        }
+
+        function reloadTelegram() {
+            const iframe = document.getElementById('telegramIframe');
+            const loading = document.getElementById('loading');
+
+            loading.style.display = 'block';
+            iframe.src = iframe.src;
+        }
+
+        // Hide loading after 5 seconds as fallback
+        setTimeout(() => {
+            hideLoading();
+        }, 5000);
+    </script>
+</body>
+</html>

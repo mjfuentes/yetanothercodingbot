@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import anthropic
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -63,31 +64,39 @@ class ClaudeUsageAPI:
             end_iso = ending_at.isoformat()
 
             # Build request parameters
-            params: dict[str, Any] = {
-                "starting_at": start_iso,
-                "ending_at": end_iso,
-                "bucket_width": bucket_width,
-            }
+            # Note: Array parameters need to be sent as multiple params with [] suffix
+            params: list[tuple[str, Any]] = [
+                ("starting_at", start_iso),
+                ("ending_at", end_iso),
+                ("bucket_width", bucket_width),
+            ]
 
             if group_by:
-                params["group_by"] = group_by
+                for item in group_by:
+                    params.append(("group_by[]", item))
             if models:
-                params["models"] = models
+                for item in models:
+                    params.append(("models[]", item))
             if service_tiers:
-                params["service_tiers"] = service_tiers
+                for item in service_tiers:
+                    params.append(("service_tiers[]", item))
 
             logger.info(f"Fetching usage report from {start_iso} to {end_iso} (bucket: {bucket_width})")
 
-            # Make API request
-            # Note: This uses the beta admin API which may require special client setup
-            response = self.client.with_options(
-                default_headers={
-                    "anthropic-version": "2023-06-01",
-                }
-            ).get(f"{self.base_url}/usage_report/messages", params=params)
+            # Make API request using requests library
+            headers = {
+                "x-api-key": self.admin_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+
+            response = requests.get(
+                f"{self.base_url}/usage_report/messages", headers=headers, params=params, timeout=30
+            )
+            response.raise_for_status()
 
             logger.info("Successfully retrieved usage report")
-            return response
+            return response.json()
 
         except Exception as e:
             logger.error(f"Error fetching usage report: {e}")
@@ -116,25 +125,30 @@ class ClaudeUsageAPI:
             end_iso = ending_at.isoformat()
 
             # Build request parameters
-            params: dict[str, Any] = {
-                "starting_at": start_iso,
-                "ending_at": end_iso,
-            }
+            # Note: Array parameters need to be sent as multiple params with [] suffix
+            params: list[tuple[str, Any]] = [
+                ("starting_at", start_iso),
+                ("ending_at", end_iso),
+            ]
 
             if group_by:
-                params["group_by"] = group_by
+                for item in group_by:
+                    params.append(("group_by[]", item))
 
             logger.info(f"Fetching cost report from {start_iso} to {end_iso}")
 
-            # Make API request
-            response = self.client.with_options(
-                default_headers={
-                    "anthropic-version": "2023-06-01",
-                }
-            ).get(f"{self.base_url}/cost_report", params=params)
+            # Make API request using requests library
+            headers = {
+                "x-api-key": self.admin_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+
+            response = requests.get(f"{self.base_url}/cost_report", headers=headers, params=params, timeout=30)
+            response.raise_for_status()
 
             logger.info("Successfully retrieved cost report")
-            return response
+            return response.json()
 
         except Exception as e:
             logger.error(f"Error fetching cost report: {e}")
