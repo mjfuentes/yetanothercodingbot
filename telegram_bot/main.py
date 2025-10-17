@@ -525,8 +525,9 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
     # Record rate limit request
     rate_limiter.record_request(user_id)
 
-    # Send immediate acknowledgment
-    status_msg = await update.message.reply_text("Working on it...")
+    # Ack already sent in handle_message before queueing
+    # Just track it for deletion later
+    status_msg = None
 
     # Send warning if approaching limits (but don't block)
     if warning_msg:
@@ -561,7 +562,11 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if not response:
             # Fallback to direct Claude response
-            logger.warning("Orchestrator failed, using fallback")
+            logger.warning("Orchestrator returned empty response, using fallback")
+            response = await claude_client.send_message(user_id, message_text)
+        elif response.strip() == "":
+            # Handle empty string responses
+            logger.warning("Orchestrator returned empty string, using fallback")
             response = await claude_client.send_message(user_id, message_text)
 
         # Check if response is a BACKGROUND_TASK request
@@ -600,8 +605,9 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
             request_type="chat"
         )
 
-        # Delete status message
-        await status_msg.delete()
+        # Delete status message if it exists
+        if status_msg:
+            await status_msg.delete()
 
         # Format and send response to user
         formatted_chunks = format_telegram_response(
@@ -623,6 +629,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+
+    # Send immediate acknowledgment before queueing
+    await update.message.reply_text("Working on it...")
+
     await queue_manager.enqueue_message(
         user_id=user_id,
         update=update,
@@ -732,7 +742,11 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
 
             if not response:
                 # Fallback to direct Claude response
-                logger.warning("Orchestrator failed, using fallback")
+                logger.warning("Orchestrator returned empty response (document handler), using fallback")
+                response = await claude_client.send_message(user_id, message_text)
+            elif response.strip() == "":
+                # Handle empty string responses
+                logger.warning("Orchestrator returned empty string (document handler), using fallback")
                 response = await claude_client.send_message(user_id, message_text)
 
             # Check if response is a BACKGROUND_TASK request
@@ -864,7 +878,11 @@ async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             if not response:
                 # Fallback to direct Claude response
-                logger.warning("Orchestrator failed, using fallback")
+                logger.warning("Orchestrator returned empty response (photo handler), using fallback")
+                response = await claude_client.send_message(user_id, message_text)
+            elif response.strip() == "":
+                # Handle empty string responses
+                logger.warning("Orchestrator returned empty string (photo handler), using fallback")
                 response = await claude_client.send_message(user_id, message_text)
 
             # Check if response is a BACKGROUND_TASK request
@@ -1001,7 +1019,11 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             if not response:
                 # Fallback to direct Claude response
-                logger.warning("Orchestrator failed, using fallback")
+                logger.warning("Orchestrator returned empty response (voice handler), using fallback")
+                response = await claude_client.send_message(user_id, transcription)
+            elif response.strip() == "":
+                # Handle empty string responses
+                logger.warning("Orchestrator returned empty string (voice handler), using fallback")
                 response = await claude_client.send_message(user_id, transcription)
 
             # Check if response is a BACKGROUND_TASK request

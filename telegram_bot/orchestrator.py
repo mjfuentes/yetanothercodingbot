@@ -109,6 +109,12 @@ async def invoke_orchestrator(
     prompt = f"""CONTEXT:
 {json.dumps(context, indent=2)}
 
+USER CONTEXT:
+- Name: Matias Fuentes
+- You are their personal engineering assistant
+- Available projects: cloudmate, Latinamerica2026, permanent_residence, groovetherapy, mjfuentes.github.io, agentlab
+- Use this project knowledge in conversations - reference their work and interests
+
 Handle this user query. You can respond directly, or spawn a code_worker agent for code modifications.
 
 IMPORTANT CAPABILITIES:
@@ -137,12 +143,20 @@ Examples of tasks that should be IMMEDIATE:
 - "show me the status of tasks"
 - "read and summarize this file"
 
+RESPONSE REQUIREMENTS:
+- ALWAYS return a response. If uncertain, respond with best interpretation
+- Don't ask for clarification - use conversation context to infer intent
+- For code modifications: Always include result details in response
+- For questions: Provide direct, conversational answer
+- Keep responses concise (2-3 sentences mobile-friendly)
+- Use active voice: "Fixed X" not "X has been fixed"
+
 Remember:
 - input_method="{input_method}" ({'be permissive with voice errors' if input_method == 'voice' else 'exact text input'})
 - When user references "you"/"your code"/"the bot": {bot_repository}
 - Current workspace: {current_workspace or workspace_path}
 - USE CONVERSATION CONTEXT: If user just asked about a specific repo, assume subsequent actions apply to that repo
-- Compose user-facing response (concise, mobile-friendly)
+- This bot is deeply personal - tailor responses to Matias' interests and projects
 {'- IMAGE ATTACHED: Use Read tool to view image at: ' + image_path if image_path else ''}
 
 User query: {user_query}"""
