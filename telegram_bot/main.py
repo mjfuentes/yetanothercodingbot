@@ -481,12 +481,13 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save restart state immediately (synchronously)
     import json
+    import time
 
     restart_state = {
         "user_id": user_id,
         "chat_id": chat_id,
         "message_id": restart_msg.message_id if restart_msg else None,
-        "timestamp": asyncio.get_event_loop().time(),
+        "timestamp": time.time(),  # Use Unix timestamp, not event loop time
     }
 
     restart_state_path = Path("data/restart_state.json")
@@ -854,7 +855,7 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(warning_msg)
 
     # Send acknowledgment message
-    ack_message = await update.message.reply_text("🔄")
+    ack_message = await update.message.reply_text("Thinking")
     ack_message_id = ack_message.message_id
 
     # Launch background task for orchestrator processing (no await)
@@ -1309,7 +1310,7 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info(f"User {user_id} (voice): {transcription}")
 
         # Send acknowledgment message
-        ack_message = await update.message.reply_text("🔄")
+        ack_message = await update.message.reply_text("Thinking")
         ack_message_id = ack_message.message_id
 
         # Launch background task for processing (no await)
@@ -1497,57 +1498,75 @@ def main():
                 message_id = restart_state.get("message_id")
                 timestamp = restart_state.get("timestamp")
 
-                # Validate restart state
+                # Validate restart state - if invalid, skip restart notification but continue initialization
                 if not user_id or not chat_id:
-                    logger.warning("Invalid restart state: missing user_id or chat_id")
+                    logger.warning("Invalid restart state: missing user_id or chat_id, skipping restart notification")
                     restart_state_path.unlink()
-                    return
-
-                # Check if restart state is too old (>5 minutes)
-                if timestamp:
+                elif timestamp:
                     import time
 
                     age = time.time() - timestamp
                     if age > 300:  # 5 minutes
-                        logger.warning(f"Restart state too old ({age:.0f}s), discarding")
+                        logger.warning(f"Restart state too old ({age:.0f}s), discarding, skipping restart notification")
                         restart_state_path.unlink()
-                        return
-
-                # Clear the user's session
-                session_manager.clear_session(user_id)
-                logger.info(f"Cleared session for user {user_id} after restart")
-
-                # Update or send completion message
-                try:
-                    if message_id:
-                        # Try to update the "Restarting..." message
-                        try:
-                            await app.bot.edit_message_text(
-                                chat_id=chat_id, message_id=message_id, text="✅ Ready! Fresh start."
-                            )
-                            logger.info(f"Updated restart message for user {user_id}")
-                        except Exception as edit_error:
-                            # If edit fails (message too old, etc), send new message
-                            logger.warning(f"Failed to edit restart message: {edit_error}, sending new message")
-                            await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
                     else:
-                        # Send new message if we don't have a message_id
-                        await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
-                    logger.info(f"Sent restart completion to user {user_id}")
-                except Exception as e:
-                    logger.error(f"Failed to send restart completion: {e}")
-                    # Don't fail silently - at least the session was cleared
+                        # Valid restart state - process it
+                        try:
+                            # Clear the user's session
+                            session_manager.clear_session(user_id)
+                            logger.info(f"Cleared session for user {user_id} after restart")
 
-                # Clean up restart state file
-                restart_state_path.unlink()
-                logger.info("Restart sequence completed successfully")
+                            # Update or send completion message
+                            if message_id:
+                                # Try to update the "Restarting..." message
+                                try:
+                                    await app.bot.edit_message_text(
+                                        chat_id=chat_id, message_id=message_id, text="✅ Ready! Fresh start."
+                                    )
+                                    logger.info(f"Updated restart message for user {user_id}")
+                                except Exception as edit_error:
+                                    # If edit fails (message too old, etc), send new message
+                                    logger.warning(f"Failed to edit restart message: {edit_error}, sending new message")
+                                    await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
+                            else:
+                                # Send new message if we don't have a message_id
+                                await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
+                            logger.info(f"Sent restart completion to user {user_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to process restart notification: {e}")
+
+                        # Clean up restart state file
+                        restart_state_path.unlink()
+                        logger.info("Restart sequence completed successfully")
+                else:
+                    # No timestamp, process as valid for backwards compatibility
+                    try:
+                        session_manager.clear_session(user_id)
+                        logger.info(f"Cleared session for user {user_id} after restart")
+
+                        if message_id:
+                            try:
+                                await app.bot.edit_message_text(
+                                    chat_id=chat_id, message_id=message_id, text="✅ Ready! Fresh start."
+                                )
+                            except Exception:
+                                await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
+                        else:
+                            await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
+                        logger.info(f"Sent restart completion to user {user_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to process restart notification: {e}")
+
+                    restart_state_path.unlink()
+                    logger.info("Restart sequence completed")
 
             except Exception as e:
                 logger.error(f"Error processing restart state: {e}", exc_info=True)
                 # Clean up even if there was an error
                 try:
-                    restart_state_path.unlink()
-                    logger.info("Cleaned up restart state file after error")
+                    if restart_state_path.exists():
+                        restart_state_path.unlink()
+                        logger.info("Cleaned up restart state file after error")
                 except Exception as cleanup_error:
                     logger.error(f"Failed to clean up restart state file: {cleanup_error}")
 
