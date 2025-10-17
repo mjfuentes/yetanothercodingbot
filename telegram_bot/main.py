@@ -727,13 +727,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             priority=10
         )
     else:
-        # Send immediate acknowledgment before queueing normal messages
-        try:
-            await update.message.reply_text("Working on it...")
-        except:
-            pass  # Message may have been processed already
-
-        # Queue with normal priority
+        # Queue with normal priority (no acknowledgment - orchestrator responds fast with Haiku)
         await queue_manager.enqueue_message(
             user_id=user_id,
             update=update,
