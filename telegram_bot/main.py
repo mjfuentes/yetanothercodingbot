@@ -1460,17 +1460,19 @@ def main():
         logger.info("Cleaning up message queues...")
         await queue_manager.cleanup_all()
 
-        logger.info("Stopping log monitor...")
-        await log_monitor_manager.stop()
+        # Log monitor is disabled, skip stopping
+        # logger.info("Stopping log monitor...")
+        # await log_monitor_manager.stop()
 
         logger.info("Shutdown complete")
 
     application.post_stop = shutdown
 
     # Start log monitoring after app is initialized
-    async def start_log_monitor(app: Application):
-        logger.info("Starting background log monitoring...")
-        await log_monitor_manager.start(log_issue_notification)
+    # DISABLED: Log monitoring alerts are disabled
+    # async def start_log_monitor(app: Application):
+    #     logger.info("Starting background log monitoring...")
+    #     await log_monitor_manager.start(log_issue_notification)
 
     # Hook to start worker pool and log monitor after post_init
     original_post_init = application.post_init
@@ -1554,8 +1556,9 @@ def main():
         await worker_pool.start()
         logger.info(f"Worker pool started with {worker_pool.max_workers} workers")
 
-        # Start log monitoring
-        await start_log_monitor(app)
+        # Start log monitoring - DISABLED
+        # await start_log_monitor(app)
+        logger.info("Log monitoring alerts are disabled")
 
     application.post_init = new_post_init
 
