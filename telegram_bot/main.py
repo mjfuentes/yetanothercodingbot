@@ -30,6 +30,8 @@ from formatter import format_telegram_response
 from cost_tracker import CostTracker
 from rate_limiter import RateLimiter
 from message_queue import MessageQueueManager
+from log_monitor import LogMonitorManager, MonitoringConfig
+from log_claude_escalation import LogClaudeEscalation, UserConfirmationManager
 
 # Check if whisper is available
 try:
@@ -73,6 +75,19 @@ claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
 cost_tracker = CostTracker()  # Track API costs
 rate_limiter = RateLimiter()  # Rate limiting
 queue_manager = MessageQueueManager()  # Message queue per user
+
+# Log monitoring system
+log_monitor_config = MonitoringConfig(
+    log_path="logs/bot.log",
+    check_interval_seconds=300,  # Check every 5 minutes
+    analysis_window_hours=1,     # Analyze last hour
+    notify_on_critical=True,
+    notify_on_warning=False,     # Only notify on critical initially
+    max_notifications_per_check=3
+)
+log_monitor_manager = LogMonitorManager(log_monitor_config)
+log_escalation = LogClaudeEscalation(BOT_REPOSITORY)
+user_confirmations = UserConfirmationManager()
 
 
 async def check_authorization(update: Update) -> bool:
@@ -1106,6 +1121,98 @@ async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Cleanup task: removed {count} stale sessions")
 
 
+async def log_issue_notification(issue, should_escalate: bool):
+    """
+    Notification callback for log monitoring
+    Called when bot detects issues in logs
+    """
+    if not ALLOWED_USERS:
+        return
+
+    # Only notify the first allowed user (usually the owner)
+    user_id = ALLOWED_USERS[0]
+
+    try:
+        # Build notification message
+        title = issue.title
+        severity = issue.level.value.upper()
+        description = issue.description
+
+        message = f"🔍 *Log Monitor Alert* [{severity}]\n\n"
+        message += f"*{title}*\n"
+        message += f"{description}\n\n"
+
+        if issue.evidence:
+            message += "📋 *Evidence*:\n"
+            for evidence_line in issue.evidence[:2]:
+                # Truncate long evidence lines
+                if len(evidence_line) > 100:
+                    evidence_line = evidence_line[:97] + "..."
+                message += f"  `{evidence_line}`\n"
+
+        message += "\n"
+
+        if should_escalate:
+            # Queue escalation to Claude
+            log_escalation.add_to_escalation_queue(issue)
+
+            # Perform Claude analysis asynchronously
+            analysis_result = await log_escalation.analyze_issues_with_claude(
+                [issue], logs_context=None
+            )
+
+            if analysis_result.get("analysis"):
+                analysis_msg = f"\n*Claude Analysis*:\n{analysis_result['analysis'][:500]}"
+                if len(analysis_result['analysis']) > 500:
+                    analysis_msg += "\n\n... (truncated)"
+
+                message += analysis_msg
+
+                # Create confirmation request if fixes are suggested
+                if analysis_result.get("suggested_fixes"):
+                    conf_id = user_confirmations.create_confirmation_request(
+                        issue=issue,
+                        suggested_action="\n".join(analysis_result['suggested_fixes'][:2]),
+                        confidence=0.85
+                    )
+                    message += f"\n\n✅ `/approve {conf_id}` to apply\n"
+                    message += f"❌ `/reject {conf_id}` to skip\n"
+
+        # Send message in chunks if too long
+        if len(message) > 4000:
+            # Split message
+            parts = message.split("\n\n")
+            current_msg = ""
+            for part in parts:
+                if len(current_msg) + len(part) > 4000:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=current_msg,
+                        parse_mode="Markdown"
+                    )
+                    current_msg = part
+                else:
+                    current_msg += "\n\n" + part if current_msg else part
+
+            if current_msg:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=current_msg,
+                    parse_mode="Markdown"
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode="Markdown"
+            )
+
+        logger.info(f"Sent log alert to user {user_id}: {issue.title}")
+
+    except Exception as e:
+        logger.error(f"Error sending log notification: {e}")
+
+
 def main():
     """Start the bot"""
     if not TELEGRAM_BOT_TOKEN:
@@ -1137,8 +1244,25 @@ def main():
     async def shutdown(app: Application):
         logger.info("Shutting down, cleaning up message queues...")
         await queue_manager.cleanup_all()
+        logger.info("Stopping log monitor...")
+        await log_monitor_manager.stop()
 
     application.post_stop = shutdown
+
+    # Start log monitoring after app is initialized
+    async def start_log_monitor(app: Application):
+        logger.info("Starting background log monitoring...")
+        await log_monitor_manager.start(log_issue_notification)
+
+    # Hook to start log monitor after post_init
+    original_post_init = application.post_init
+
+    async def new_post_init(app: Application):
+        if original_post_init:
+            await original_post_init(app)
+        await start_log_monitor(app)
+
+    application.post_init = new_post_init
 
     # Add handlers
     application.add_handler(CommandHandler("start", start_command))
