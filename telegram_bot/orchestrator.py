@@ -185,7 +185,7 @@ User query: {user_query}"""
         cmd = [
             "claude", "chat",
             "--model", "haiku",  # Fast responses for chat/routing (background tasks use Sonnet)
-            "--permission-mode", "bypass-permissions"  # Auto-approve write operations
+            "--permission-mode", "bypassPermissions"  # Auto-approve write operations
         ]
 
         logger.debug(f"Command: {' '.join(cmd)}")
@@ -203,26 +203,30 @@ User query: {user_query}"""
         )
 
         try:
-            # Send prompt (non-blocking with timeout for stdin operations)
+            # Send prompt and wait for response (fast with Haiku: 1-2s)
             if process.stdin:
                 process.stdin.write(f"{prompt}\n".encode())
-                await asyncio.wait_for(process.stdin.drain(), timeout=5)
+                await process.stdin.drain()
                 process.stdin.close()
 
-            logger.info("Orchestrator subprocess started (detached, fire-and-forget)")
+            logger.info("Waiting for orchestrator response...")
 
-            # IMPORTANT: Do NOT call process.communicate() here!
-            # That would block waiting for subprocess completion.
-            # Instead, spawn a background task to collect the response asynchronously.
-            # This allows invoke_orchestrator() to return immediately (<100ms).
+            # Wait for orchestrator response (Haiku is fast)
+            stdout, stderr = await process.communicate()
 
-            # Spawn background task to handle response collection
-            asyncio.create_task(_collect_orchestrator_response(process, user_query))
+            output = stdout.decode().strip()
 
-            # Return immediately - no waiting for Claude Code to finish
-            # The real response will be collected asynchronously in background
-            logger.debug("Returning immediately from orchestrator (response collected in background)")
-            return "Processing your request..."
+            if stderr:
+                error_msg = stderr.decode().strip()
+                if error_msg and not error_msg.startswith("Loading"):
+                    logger.warning(f"Orchestrator stderr: {error_msg}")
+
+            if not output:
+                logger.error("Empty output from orchestrator")
+                return None
+
+            logger.info(f"Orchestrator response: {output[:100]}...")
+            return output
 
         except Exception as e:
             logger.error(f"Error starting orchestrator process: {e}")
@@ -233,47 +237,3 @@ User query: {user_query}"""
     except Exception as e:
         logger.error(f"Error invoking orchestrator: {e}")
         return None
-
-
-async def _collect_orchestrator_response(process, user_query: str) -> None:
-    """
-    Background task to collect orchestrator response asynchronously.
-
-    This runs detached from the main request handling, allowing the HTTP
-    response to return immediately while we collect the orchestrator output.
-
-    Args:
-        process: The subprocess running Claude Code
-        user_query: Original user query for logging
-    """
-    try:
-        # Now we can wait for the full response without blocking the bot
-        stdout, stderr = await process.communicate()
-
-        output = stdout.decode().strip()
-
-        if stderr:
-            error_msg = stderr.decode().strip()
-            if error_msg and not error_msg.startswith("Loading"):
-                logger.warning(f"Orchestrator stderr: {error_msg}")
-
-        if not output:
-            logger.error("Empty output from orchestrator")
-            return
-
-        logger.info(f"Orchestrator response collected: {output[:100]}...")
-
-        # Process background tasks if needed
-        if output.startswith("BACKGROUND_TASK:"):
-            logger.info("Background task detected in orchestrator response")
-            # This would be handled by the background task system in main.py
-
-    except Exception as e:
-        logger.error(f"Error collecting orchestrator response: {e}", exc_info=True)
-    finally:
-        # Ensure process is cleaned up
-        try:
-            if process.returncode is None:
-                process.kill()
-        except:
-            pass
