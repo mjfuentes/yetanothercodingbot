@@ -181,7 +181,7 @@ User query: {user_query}"""
         cmd = [
             "claude", "chat",
             "--model", "haiku",  # Fast responses for chat/routing (background tasks use Sonnet)
-            "--permission-mode", "bypassPermissions"  # Auto-approve write operations
+            "--permission-mode", "bypass-permissions"  # Auto-approve write operations
         ]
 
         logger.debug(f"Command: {' '.join(cmd)}")
