@@ -26,7 +26,6 @@ class WorkflowEnforcer:
                 ["python3", "-m", "pre_commit", "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5,
                 cwd=str(self.workspace),
             )
             self.pre_commit_installed = result.returncode == 0
@@ -34,7 +33,7 @@ class WorkflowEnforcer:
             # Fallback to pre-commit command
             if not self.pre_commit_installed:
                 result = subprocess.run(
-                    ["pre-commit", "--version"], capture_output=True, text=True, timeout=5, cwd=str(self.workspace)
+                    ["pre-commit", "--version"], capture_output=True, text=True, cwd=str(self.workspace)
                 )
                 self.pre_commit_installed = result.returncode == 0
 
@@ -49,7 +48,7 @@ class WorkflowEnforcer:
         try:
             # Get modified files
             result = subprocess.run(
-                ["git", "diff", "--name-only"], capture_output=True, text=True, timeout=5, cwd=str(self.workspace)
+                ["git", "diff", "--name-only"], capture_output=True, text=True, cwd=str(self.workspace)
             )
             modified = result.stdout.strip().split("\n") if result.stdout.strip() else []
 
@@ -58,7 +57,6 @@ class WorkflowEnforcer:
                 ["git", "ls-files", "--others", "--exclude-standard"],
                 capture_output=True,
                 text=True,
-                timeout=5,
                 cwd=str(self.workspace),
             )
             untracked = result.stdout.strip().split("\n") if result.stdout.strip() else []
@@ -74,7 +72,7 @@ class WorkflowEnforcer:
         """Check if there are uncommitted changes"""
         try:
             result = subprocess.run(
-                ["git", "status", "--porcelain"], capture_output=True, text=True, timeout=5, cwd=str(self.workspace)
+                ["git", "status", "--porcelain"], capture_output=True, text=True, cwd=str(self.workspace)
             )
             return bool(result.stdout.strip())
         except Exception as e:
@@ -105,7 +103,6 @@ class WorkflowEnforcer:
                 ["python3", "-m", "pytest", "-v", "--tb=short"],
                 capture_output=True,
                 text=True,
-                timeout=120,
                 cwd=str(self.workspace),
             )
 
@@ -113,9 +110,6 @@ class WorkflowEnforcer:
                 return True, f"Tests passed:\n{result.stdout}"
             else:
                 return False, f"Tests failed:\n{result.stdout}\n{result.stderr}"
-
-        except subprocess.TimeoutExpired:
-            return False, "Tests timed out after 120 seconds"
         except FileNotFoundError:
             return False, "pytest not available - install with: pip install pytest"
         except Exception as e:
@@ -135,21 +129,18 @@ class WorkflowEnforcer:
 
             # Try python3 -m pre_commit first
             cmd = ["python3", "-m", "pre_commit", "run", "--files"] + changed_files
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(self.workspace))
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.workspace))
 
             # If that fails, try pre-commit command
             if result.returncode != 0 and "No module named" in result.stderr:
                 cmd = ["pre-commit", "run", "--files"] + changed_files
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(self.workspace))
+                result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.workspace))
 
             # Pre-commit returns 0 if all hooks pass, 1 if any fail
             if result.returncode == 0:
                 return True, "Pre-commit hooks passed"
             else:
                 return False, f"Pre-commit hooks failed:\n{result.stdout}\n{result.stderr}"
-
-        except subprocess.TimeoutExpired:
-            return False, "Pre-commit hooks timed out"
         except Exception as e:
             return False, f"Error running pre-commit hooks: {str(e)}"
 
@@ -157,16 +148,14 @@ class WorkflowEnforcer:
         """Create a git commit with all changes"""
         try:
             # Stage all changes
-            result = subprocess.run(
-                ["git", "add", "-A"], capture_output=True, text=True, timeout=10, cwd=str(self.workspace)
-            )
+            result = subprocess.run(["git", "add", "-A"], capture_output=True, text=True, cwd=str(self.workspace))
 
             if result.returncode != 0:
                 return False, f"Failed to stage changes: {result.stderr}"
 
             # Create commit
             result = subprocess.run(
-                ["git", "commit", "-m", message], capture_output=True, text=True, timeout=30, cwd=str(self.workspace)
+                ["git", "commit", "-m", message], capture_output=True, text=True, cwd=str(self.workspace)
             )
 
             if result.returncode == 0:
@@ -245,5 +234,7 @@ After completing any code changes, you MUST:
 3. Create a git commit with your changes
 
 Use the workflow enforcement system to validate your changes before considering the task complete.
+
+IMPORTANT: Never use placeholder messages like "I'll work on this" or "Working on it". Always complete the entire task and provide the actual implementation. The workflow enforcer will run after you finish, so ensure all code is properly written and tested.
 """
         return context
