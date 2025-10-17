@@ -25,6 +25,7 @@ class LogClaudeEscalation:
         self.escalation_cache = {}  # Cache Claude responses
         self.cache_expiry = 3600  # Cache for 1 hour
         self.last_escalation_time = None
+        self.escalation_queue: List[LogIssue] = []  # Queue for issues to be analyzed
 
     async def analyze_issues_with_claude(
         self,
@@ -157,6 +158,20 @@ Be concise and technical."""
             k: v for k, v in self.escalation_cache.items()
             if (now - v.get("timestamp", now)).total_seconds() < self.cache_expiry
         }
+
+    def add_to_escalation_queue(self, issue: LogIssue):
+        """Add issue to escalation queue for Claude analysis"""
+        self.escalation_queue.append(issue)
+        logger.debug(f"Added issue to escalation queue: {issue.title}")
+
+    def get_escalation_queue(self) -> List[LogIssue]:
+        """Get issues queued for Claude analysis"""
+        return self.escalation_queue
+
+    def clear_escalation_queue(self):
+        """Clear escalation queue after analysis"""
+        self.escalation_queue = []
+        logger.debug("Escalation queue cleared")
 
 
 class UserConfirmationManager:
