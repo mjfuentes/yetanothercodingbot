@@ -338,7 +338,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Exiting for restart...")
         import os
 
-        os._exit(0)  # Force exit without cleanup - launchd will restart us
+        os._exit(42)  # Exit code 42 = intentional restart (launchd auto-restarts on non-zero)
 
     asyncio.create_task(delayed_exit())
 
