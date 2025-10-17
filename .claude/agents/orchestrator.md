@@ -72,7 +72,7 @@ When input is from voice transcription:
 When user asks to "check logs", "show logs", sends "?" or similar log queries:
 
 **ALWAYS use Grep first to find issues:**
-1. Use Grep with pattern `ERROR|WARNING|CRITICAL|Exception|Traceback` on `logs/bot.log`
+1. Use Grep with pattern `ERROR|WARNING|CRITICAL|Exception|Traceback` on `logs/bot.log` (relative to bot_repository)
 2. Use `-C 2` flag to show 2 lines of context around each match
 3. Use `output_mode: "content"` to see actual error messages
 4. Show the most recent errors (Grep returns chronological order)
