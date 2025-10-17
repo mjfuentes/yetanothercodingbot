@@ -65,6 +65,9 @@ testpaths = ["telegram_bot"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+markers = [
+    "asyncio: mark test as async"
+]
 
 [tool.mypy]
 python_version = "3.12"

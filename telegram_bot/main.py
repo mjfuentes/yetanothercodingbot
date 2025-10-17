@@ -204,19 +204,19 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Cost tracking
     usage_stats = cost_tracker.get_usage_stats(user_id)
 
-    # Build compact status message
-    message_parts = ["*Status*\n"]
+    # Build compact status message (plain text - formatter will convert to HTML)
+    message_parts = ["Status\n"]
 
     # Active Tasks - only show if there are any
     if active_tasks:
-        message_parts.append(f"*Active Tasks ({len(active_tasks)})*")
+        message_parts.append(f"Active Tasks ({len(active_tasks)})")
         for task in active_tasks[:5]:  # Show up to 5 active tasks
             status_icon = "⏳" if task.status == "pending" else "▶️"
-            message_parts.append(f"{status_icon} `#{task.task_id}` {task.description[:50]}")
+            message_parts.append(f"{status_icon} #{task.task_id} {task.description[:50]}")
         message_parts.append("")
 
     # API Usage - compact format with session and weekly
-    message_parts.append("*API Usage*")
+    message_parts.append("API Usage")
 
     # Session usage (if available)
     if usage_stats.get("session_cost", 0) > 0:
@@ -255,16 +255,20 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Failed tasks - only show if there are any
     if failed_tasks:
-        message_parts.append(f"\n*Recent Errors ({len(failed_tasks)})*")
+        message_parts.append(f"\nRecent Errors ({len(failed_tasks)})")
         for task in failed_tasks:
             error_preview = task.error[:60] if task.error else "Unknown error"
-            message_parts.append(f"❌ `#{task.task_id}` {error_preview}")
+            message_parts.append(f"❌ #{task.task_id} {error_preview}")
 
     # If nothing to show
     if not active_tasks and not failed_tasks:
         message_parts.append("\n✓ No active tasks or errors")
 
-    await update.message.reply_text("\n".join(message_parts), parse_mode="Markdown")
+    # Format and send using HTML formatter (handles entities properly)
+    message = "\n".join(message_parts)
+    formatted_chunks = format_telegram_response(message, max_length=4000)
+    for chunk in formatted_chunks:
+        await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
