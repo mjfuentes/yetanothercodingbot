@@ -139,31 +139,40 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
 📚 *How to use me:*
 
-*Simple queries:*
-"What's 2+2?"
-"Explain async/await in Python"
+🔹 *Quick Help*
+• Ask questions: "What's 2+2?"
+• Explain concepts: "How does async/await work?"
+• Get analysis: "Explain this code block"
 
-*Code generation:*
-"Build a REST API for user management"
-"Create a React component for a login form"
+🔹 *Code Tasks*
+• Create: "Build a Python REST API"
+• Fix: "Fix this bug in my code"
+• Refactor: "Improve performance of this function"
+• Generate: "Write unit tests for my service"
+I handle complex tasks in the background! 🚀
 
-*Multi-repository:*
-"in ~/myproject, create a new file"
-"for repository /workspace/app, fix bug"
-Or use: /cd /path/to/workspace
+🔹 *Multi-Repository Support*
+Specify workspace inline in messages:
+• "in ~/myapp, create a file"
+• "for /workspace/api, fix auth"
 
-*Research & Planning:*
-"Research best practices for WebSocket servers"
-"Plan a microservices architecture"
+🔹 *Commands*
+/status - View tasks, costs & usage
+/usage - Detailed API cost breakdown
+/start - Fresh conversation
+/clear - Reset history
+/help - This message
 
-*Commands:*
-/start - Start fresh (clears history)
-/status - Check background tasks
-/clear - Reset conversation
-/cd - Change workspace (clears history)
-/help - Show this message
+🔹 *Limits & Costs*
+⚠️ Rate limits: 30 req/min, 500 req/hour
+💰 API usage is tracked and limited
+📊 Use /usage to check spending
 
-💡 Tip: I can handle complex multi-step tasks in the background!
+🔹 *Tips*
+✨ Upload files for analysis (PDFs, code, etc)
+🎤 Send voice messages (auto-transcribed)
+📋 I remember conversation context
+⏳ Complex tasks run in background
     """
 
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -315,57 +324,6 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Graceful shutdown then restart
     restart_bot()
-
-
-async def cd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /cd command to change workspace"""
-    if not await check_authorization(update):
-        return
-
-    user_id = update.effective_user.id
-
-    # Get workspace path from command args
-    if not context.args:
-        # Show current workspace
-        current = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-        await update.message.reply_text(
-            f"📂 *Current workspace:*\n`{current}`\n\n"
-            f"Usage: `/cd /path/to/workspace`",
-            parse_mode="Markdown"
-        )
-        return
-
-    workspace = " ".join(context.args)
-
-    # Expand ~ to home directory
-    workspace = os.path.expanduser(workspace)
-
-    # Check if path exists
-    if not os.path.exists(workspace):
-        await update.message.reply_text(
-            f"❌ Path does not exist: `{workspace}`\n\n"
-            f"Please create it first or check the path.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # Get current workspace to check if it's actually changing
-    current_workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-
-    # Set workspace
-    session_manager.set_workspace(user_id, workspace)
-
-    # Clear conversation history when switching workspaces
-    if workspace != current_workspace:
-        session_manager.clear_session(user_id)
-        logger.info(f"Cleared session for user {user_id} due to workspace change: {current_workspace} -> {workspace}")
-
-    await update.message.reply_text(
-        f"✅ Workspace changed to:\n`{workspace}`\n\n"
-        f"All code tasks will now run in this directory.\n"
-        f"💭 Conversation history cleared.",
-        parse_mode="Markdown"
-    )
 
 
 def extract_workspace_from_message(message: str) -> tuple[Optional[str], str]:
@@ -1119,7 +1077,6 @@ def main():
             BotCommand("usage", "Show detailed API usage & costs"),
             BotCommand("clear", "Clear conversation"),
             BotCommand("restart", "Restart the bot"),
-            BotCommand("cd", "Change workspace (clears history)"),
         ])
 
     application.post_init = post_init
@@ -1131,7 +1088,6 @@ def main():
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("restart", restart_command))
-    application.add_handler(CommandHandler("cd", cd_command))
 
     # Handle messages
     application.add_handler(
