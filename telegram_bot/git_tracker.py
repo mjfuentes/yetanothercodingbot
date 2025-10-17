@@ -160,7 +160,7 @@ class GitTracker:
 
         # Block if trying to work on different repo
         lines = ["⚠️ Can't work on that repo yet. You have uncommitted changes:"]
-        for repo_path, operation in dirty.items():
+        for repo_path, _operation in dirty.items():
             repo_name = Path(repo_path).name
             has_changes, status = self.check_repo_status(repo_path)
             lines.append(f"\n• {repo_name}: {status}")

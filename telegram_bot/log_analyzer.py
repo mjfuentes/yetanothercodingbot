@@ -134,7 +134,8 @@ class LocalLogAnalyzer:
                     ts = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
                     if ts >= cutoff_time:
                         parsed.append((ts, line.strip()))
-            except:
+            except (ValueError, AttributeError):
+                # Skip malformed log lines
                 continue
 
         return parsed
@@ -306,7 +307,7 @@ class LocalLogAnalyzer:
         recommendations = []
 
         # Check if logs have httpx noise (noisy logging)
-        httpx_lines = [l for _, l in logs if "httpx" in l.lower()]
+        httpx_lines = [log_line for _, log_line in logs if "httpx" in log_line.lower()]
         if len(httpx_lines) > len(logs) * 0.5:  # More than 50% are httpx logs
             recommendations.append(
                 LogIssue(

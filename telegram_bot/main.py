@@ -471,12 +471,16 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     logger.info(f"Restart requested by user {user_id}")
 
-    # Send acknowledgment immediately
+    # Send acknowledgment and wait for it to complete
     restart_msg = None
     try:
         restart_msg = await update.message.reply_text("🔄 Restarting...")
+        logger.info(f"Sent restart message to user {user_id}")
     except Exception as e:
         logger.error(f"Failed to send restart acknowledgment: {e}")
+        # Don't restart if we can't even send the message
+        await update.message.reply_text("Failed to initiate restart. Please try again.")
+        return
 
     # Save restart state immediately (synchronously)
     import json
@@ -495,12 +499,18 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"Saved restart state for user {user_id}")
 
-    # Schedule exit after a brief delay to let message send
+    # Schedule exit after ensuring message is sent
     async def delayed_exit():
-        await asyncio.sleep(0.5)  # Just enough time for message to send
+        # Give more time for the message to be fully delivered
+        await asyncio.sleep(1.0)
         logger.info("Exiting for restart...")
         import os
 
+        # Flush logs before exit
+        for handler in logging.root.handlers:
+            handler.flush()
+
+        # Exit with non-zero code to trigger launchd restart
         os._exit(42)  # Exit code 42 = intentional restart (launchd auto-restarts on non-zero)
 
     asyncio.create_task(delayed_exit())
@@ -1440,40 +1450,68 @@ def main():
         restart_state_path = Path("data/restart_state.json")
         if restart_state_path.exists():
             try:
+                logger.info("Found restart state file, processing...")
                 with open(restart_state_path) as f:
                     restart_state = json.load(f)
 
                 user_id = restart_state.get("user_id")
                 chat_id = restart_state.get("chat_id")
                 message_id = restart_state.get("message_id")
+                timestamp = restart_state.get("timestamp")
 
-                if user_id and chat_id:
-                    # Clear the user's session
-                    session_manager.clear_session(user_id)
-                    logger.info(f"Cleared session for user {user_id} after restart")
+                # Validate restart state
+                if not user_id or not chat_id:
+                    logger.warning("Invalid restart state: missing user_id or chat_id")
+                    restart_state_path.unlink()
+                    return
 
-                    # Update or send completion message
-                    try:
-                        if message_id:
-                            # Update the "Restarting..." message
+                # Check if restart state is too old (>5 minutes)
+                if timestamp:
+                    import time
+
+                    age = time.time() - timestamp
+                    if age > 300:  # 5 minutes
+                        logger.warning(f"Restart state too old ({age:.0f}s), discarding")
+                        restart_state_path.unlink()
+                        return
+
+                # Clear the user's session
+                session_manager.clear_session(user_id)
+                logger.info(f"Cleared session for user {user_id} after restart")
+
+                # Update or send completion message
+                try:
+                    if message_id:
+                        # Try to update the "Restarting..." message
+                        try:
                             await app.bot.edit_message_text(
                                 chat_id=chat_id, message_id=message_id, text="✅ Ready! Fresh start."
                             )
-                        else:
-                            # Send new message
+                            logger.info(f"Updated restart message for user {user_id}")
+                        except Exception as edit_error:
+                            # If edit fails (message too old, etc), send new message
+                            logger.warning(f"Failed to edit restart message: {edit_error}, sending new message")
                             await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
-                        logger.info(f"Sent restart completion to user {user_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to send restart completion: {e}")
+                    else:
+                        # Send new message if we don't have a message_id
+                        await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
+                    logger.info(f"Sent restart completion to user {user_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send restart completion: {e}")
+                    # Don't fail silently - at least the session was cleared
 
                 # Clean up restart state file
                 restart_state_path.unlink()
-                logger.info("Restart sequence completed")
+                logger.info("Restart sequence completed successfully")
 
             except Exception as e:
-                logger.error(f"Error processing restart state: {e}")
+                logger.error(f"Error processing restart state: {e}", exc_info=True)
                 # Clean up even if there was an error
-                restart_state_path.unlink(missing_ok=True)
+                try:
+                    restart_state_path.unlink()
+                    logger.info("Cleaned up restart state file after error")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up restart state file: {cleanup_error}")
 
         # Start worker pool for background task execution
         logger.info("Starting background worker pool...")

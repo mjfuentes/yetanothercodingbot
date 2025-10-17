@@ -80,7 +80,6 @@ async def invoke_orchestrator(
     active_tasks_info = []
     if task_manager:
         # Get user's active tasks (pending or in_progress)
-        user_id = None  # We need to pass user_id to this function
         # For now, get all active tasks - orchestrator will filter by context
         all_tasks = task_manager.tasks.values()
         active_tasks_info = [
@@ -239,7 +238,8 @@ User query: {user_query}"""
                 try:
                     process.kill()
                     await process.wait()
-                except:
+                except (ProcessLookupError, OSError):
+                    # Process already terminated
                     pass
             return None
 

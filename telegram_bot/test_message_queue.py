@@ -163,7 +163,7 @@ async def test_queue_manager_status():
     user_status = await queue_manager.get_user_status(123)
     assert user_status is not None
     assert user_status["user_id"] == 123
-    assert user_status["processing"] == True
+    assert user_status["processing"]
 
 
 @pytest.mark.asyncio
