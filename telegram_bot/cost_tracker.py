@@ -161,6 +161,11 @@ class CostTracker:
             usage.last_reset = now.isoformat()
             logger.info(f"Reset monthly costs for user {usage.user_id}")
 
+    def estimate_tokens(self, text: str) -> int:
+        """Estimate token count from text (rough approximation)"""
+        # Rough estimate: ~4 characters per token for English text
+        return max(1, len(text) // 4)
+
     def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
         """Calculate cost for API call"""
         if model not in PRICING:

@@ -229,6 +229,49 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /usage command - show detailed API usage and costs"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+
+    # Get cost stats
+    cost_stats = cost_tracker.get_usage_stats(user_id)
+
+    # Get rate limit stats
+    rate_stats = rate_limiter.get_user_stats(user_id)
+
+    # Build detailed message
+    message = f"""💰 *API Usage & Costs*
+
+📊 *Total Usage*
+• Total requests: {cost_stats['total_requests']}
+• Total cost: ${cost_stats['total_cost']:.4f}
+• Recent (24h): {cost_stats['recent_24h']} requests
+
+💵 *Current Period*
+• Daily: ${cost_stats['daily_cost']:.4f} / ${cost_stats['daily_limit']:.2f} ({cost_stats['daily_percentage']:.1f}%)
+• Monthly: ${cost_stats['monthly_cost']:.4f} / ${cost_stats['monthly_limit']:.2f} ({cost_stats['monthly_percentage']:.1f}%)
+
+⚡ *Rate Limits*
+• Last minute: {rate_stats['requests_last_minute']} / {rate_stats['limit_per_minute']} ({rate_stats['minute_percentage']:.0f}%)
+• Last hour: {rate_stats['requests_last_hour']} / {rate_stats['limit_per_hour']} ({rate_stats['hour_percentage']:.0f}%)"""
+
+    if rate_stats['in_cooldown']:
+        message += f"\n• ⏳ Cooldown: {rate_stats['cooldown_remaining']}s remaining"
+
+    # Add model breakdown if available
+    if cost_stats['model_breakdown']:
+        message += "\n\n🤖 *By Model*\n"
+        for model, stats in cost_stats['model_breakdown'].items():
+            message += f"• {model}: {stats['requests']} requests (${stats['cost']:.4f})\n"
+
+    message += f"\n\n_Last reset: {cost_stats['last_reset'][:19]}_"
+
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /clear command"""
     if not await check_authorization(update):
@@ -1072,7 +1115,8 @@ def main():
         await app.bot.set_my_commands([
             BotCommand("start", "Start fresh (clears history)"),
             BotCommand("help", "Get help"),
-            BotCommand("status", "Check running tasks"),
+            BotCommand("status", "Check session, tasks & costs"),
+            BotCommand("usage", "Show detailed API usage & costs"),
             BotCommand("clear", "Clear conversation"),
             BotCommand("restart", "Restart the bot"),
             BotCommand("cd", "Change workspace (clears history)"),
@@ -1084,6 +1128,7 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("cd", cd_command))
