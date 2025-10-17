@@ -305,11 +305,13 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     logger.info(f"Restart requested by user {user_id}")
 
     # Send acknowledgment immediately
+    restart_msg = None
     try:
-        await update.message.reply_text("Restarting bot... back in a moment.")
+        restart_msg = await update.message.reply_text("⏳ Restarting...")
     except Exception as e:
         logger.error(f"Failed to send restart acknowledgment: {e}")
 
@@ -317,12 +319,26 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def graceful_restart():
         """Gracefully restart the bot"""
         try:
+            # Save restart state so we can notify user when back up
+            import json
+            from pathlib import Path
+
+            restart_state = {
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "message_id": restart_msg.message_id if restart_msg else None,
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+
+            restart_state_path = Path("data/restart_state.json")
+            restart_state_path.parent.mkdir(exist_ok=True)
+            with open(restart_state_path, "w") as f:
+                json.dump(restart_state, f)
+
+            logger.info(f"Saved restart state for user {user_id}")
+
             # Give message time to send
             await asyncio.sleep(1)
-
-            # Save current session state
-            logger.info("Saving session state before restart...")
-            # Sessions are already persistent in session_manager
 
             # Cleanup queue manager gracefully
             logger.info("Cleaning up message queues...")
@@ -1305,6 +1321,48 @@ def main():
     async def new_post_init(app: Application):
         if original_post_init:
             await original_post_init(app)
+
+        # Check for restart state and notify user
+        import json
+        from pathlib import Path
+
+        restart_state_path = Path("data/restart_state.json")
+        if restart_state_path.exists():
+            try:
+                with open(restart_state_path) as f:
+                    restart_state = json.load(f)
+
+                user_id = restart_state.get("user_id")
+                chat_id = restart_state.get("chat_id")
+                message_id = restart_state.get("message_id")
+
+                if user_id and chat_id:
+                    # Clear the user's session
+                    session_manager.clear_session(user_id)
+                    logger.info(f"Cleared session for user {user_id} after restart")
+
+                    # Update or send completion message
+                    try:
+                        if message_id:
+                            # Update the "Restarting..." message
+                            await app.bot.edit_message_text(
+                                chat_id=chat_id, message_id=message_id, text="✅ Ready! Fresh start."
+                            )
+                        else:
+                            # Send new message
+                            await app.bot.send_message(chat_id=chat_id, text="✅ Ready! Fresh start.")
+                        logger.info(f"Sent restart completion to user {user_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send restart completion: {e}")
+
+                # Clean up restart state file
+                restart_state_path.unlink()
+                logger.info("Restart sequence completed")
+
+            except Exception as e:
+                logger.error(f"Error processing restart state: {e}")
+                # Clean up even if there was an error
+                restart_state_path.unlink(missing_ok=True)
 
         # Start worker pool for background task execution
         logger.info("Starting background worker pool...")
