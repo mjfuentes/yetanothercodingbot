@@ -57,8 +57,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
     handlers=[
-        logging.FileHandler("logs/bot.log"),
-        logging.StreamHandler()
+        logging.FileHandler("logs/bot.log")
+        # NOTE: No StreamHandler when running under launchd - it captures stdout/stderr automatically
+        # to avoid duplicate log entries
     ],
     force=True  # Replace any existing handlers
 )
