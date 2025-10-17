@@ -1,0 +1,93 @@
+# Pre-commit hooks configuration for Telegram Bot
+# Run pre-commit install to set up the git hook
+# Run pre-commit run --all-files to run manually
+
+repos:
+  # Python code formatting
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: ['--line-length=120']
+        files: '^telegram_bot/.*\.py$'
+
+  # Import sorting
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile=black', '--line-length=120']
+        files: '^telegram_bot/.*\.py$'
+
+  # Linting with ruff (fast, comprehensive)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: ['--fix', '--exit-non-zero-on-fix']
+        files: '^telegram_bot/.*\.py$'
+
+  # Security checks
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml']
+        additional_dependencies: ['bandit[toml]']
+        files: '^telegram_bot/.*\.py$'
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        files: '^telegram_bot/.*\.(py|md|txt|yaml|yml)$'
+      - id: end-of-file-fixer
+        files: '^telegram_bot/.*\.(py|md|txt|yaml|yml)$'
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-toml
+      - id: mixed-line-ending
+
+  # Python-specific checks
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: v1.10.0
+    hooks:
+      - id: python-check-blanket-noqa
+        files: '^telegram_bot/.*\.py$'
+      - id: python-check-blanket-type-ignore
+        files: '^telegram_bot/.*\.py$'
+      - id: python-no-eval
+        files: '^telegram_bot/.*\.py$'
+
+  # Local hooks for project-specific tests
+  - repo: local
+    hooks:
+      # Syntax check all Python files
+      - id: python-syntax
+        name: Check Python syntax
+        entry: python3 -m py_compile
+        language: system
+        files: '^telegram_bot/.*\.py$'
+        pass_filenames: true
+
+      # Run pytest if tests exist
+      - id: pytest
+        name: Run pytest
+        entry: bash -c 'cd telegram_bot && if [ -f "test_*.py" ] || [ -d "tests" ]; then python3 -m pytest -v --tb=short; fi'
+        language: system
+        files: '^telegram_bot/.*\.py$'
+        pass_filenames: false
+        always_run: false
+
+      # Check for common security issues
+      - id: check-secrets
+        name: Check for secrets
+        entry: bash -c 'if grep -rIn --exclude-dir=".git" --exclude="*.pyc" --exclude-dir="__pycache__" "TELEGRAM_BOT_TOKEN\s*=\s*['\''\"]\w" telegram_bot/; then echo "Found hardcoded secrets!"; exit 1; fi'
+        language: system
+        files: '^telegram_bot/.*\.py$'
+        pass_filenames: false

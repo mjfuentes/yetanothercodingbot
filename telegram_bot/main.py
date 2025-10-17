@@ -9,34 +9,29 @@ import logging
 import os
 import subprocess
 import tempfile
-from pathlib import Path
-from typing import Dict, Optional
-
-from dotenv import load_dotenv
-from telegram import Update, BotCommand
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
-
-from session import ClaudeCodeSession, SessionManager
-from tasks import TaskManager
-from claude_interactive import ClaudeSessionPool
-from orchestrator import invoke_orchestrator
 from formatter import format_telegram_response
+from pathlib import Path
+
+from claude_api import ask_claude
+from claude_interactive import ClaudeSessionPool
 from cost_tracker import CostTracker
-from rate_limiter import RateLimiter
-from message_queue import MessageQueueManager
-from log_monitor import LogMonitorManager, MonitoringConfig
+from dotenv import load_dotenv
+from git_tracker import get_git_tracker
 from log_claude_escalation import LogClaudeEscalation, UserConfirmationManager
+from log_monitor import LogMonitorManager, MonitoringConfig
+from message_queue import MessageQueueManager
+from orchestrator import discover_repositories
+from rate_limiter import RateLimiter
+from session import ClaudeCodeSession, SessionManager
+from tasks import Task, TaskManager
+from telegram import BotCommand, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from worker_pool import WorkerPool
 
 # Check if whisper is available
 try:
     import whisper
+
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
@@ -61,7 +56,7 @@ logging.basicConfig(
         # NOTE: No StreamHandler when running under launchd - it captures stdout/stderr automatically
         # to avoid duplicate log entries
     ],
-    force=True  # Replace any existing handlers
+    force=True,  # Replace any existing handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -87,10 +82,10 @@ worker_pool = WorkerPool(max_workers=3)  # Bounded worker pool for background ta
 log_monitor_config = MonitoringConfig(
     log_path="logs/bot.log",
     check_interval_seconds=300,  # Check every 5 minutes
-    analysis_window_hours=1,     # Analyze last hour
+    analysis_window_hours=1,  # Analyze last hour
     notify_on_critical=True,
-    notify_on_warning=False,     # Only notify on critical initially
-    max_notifications_per_check=3
+    notify_on_warning=False,  # Only notify on critical initially
+    max_notifications_per_check=3,
 )
 log_monitor_manager = LogMonitorManager(log_monitor_config)
 log_escalation = LogClaudeEscalation(BOT_REPOSITORY)
@@ -107,11 +102,7 @@ async def _async_add_session_message(user_id: int, role: str, content: str):
 async def _async_record_usage(user_id: int, model: str, input_tokens: int, output_tokens: int, request_type: str):
     """Async wrapper for cost tracking write - queued to worker pool"""
     cost_tracker.record_usage(
-        user_id=user_id,
-        model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        request_type=request_type
+        user_id=user_id, model=model, input_tokens=input_tokens, output_tokens=output_tokens, request_type=request_type
     )
     logger.debug(f"Queued cost tracking: user {user_id}, model {model}")
 
@@ -121,9 +112,7 @@ async def check_authorization(update: Update) -> bool:
     user_id = update.effective_user.id
 
     if not ALLOWED_USERS or user_id not in ALLOWED_USERS:
-        await update.message.reply_text(
-            "Unauthorized. Please contact the bot owner."
-        )
+        await update.message.reply_text("Unauthorized. Please contact the bot owner.")
         logger.warning(f"Unauthorized access attempt by user {user_id}")
         return False
 
@@ -144,33 +133,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get recent changes
     try:
         result = subprocess.run(
-            ["git", "log", "--oneline", "-3"],
-            cwd=BOT_REPOSITORY,
-            capture_output=True,
-            text=True,
-            timeout=2
+            ["git", "log", "--oneline", "-3"], cwd=BOT_REPOSITORY, capture_output=True, text=True, timeout=2
         )
         recent_changes = result.stdout.strip() if result.returncode == 0 else None
-    except:
+    except Exception:
         recent_changes = None
 
     welcome_message = "*Started fresh*\n\n"
 
     if recent_changes:
         welcome_message += "*Recent updates:*\n"
-        for line in recent_changes.split('\n')[:2]:  # Show last 2 commits
+        for line in recent_changes.split("\n")[:2]:  # Show last 2 commits
             # Format: hash message -> • message
-            parts = line.split(' ', 1)
+            parts = line.split(" ", 1)
             if len(parts) == 2:
                 welcome_message += f"• {parts[1]}\n"
         welcome_message += "\n"
 
     welcome_message += "Send me a message or /help to see what I can do!"
 
-    await update.message.reply_text(
-        welcome_message,
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(welcome_message, parse_mode="Markdown")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,8 +198,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Task status
     active_tasks = task_manager.get_active_tasks(user_id)
     recent_tasks = task_manager.get_user_tasks(user_id, limit=5)
-    completed = [t for t in recent_tasks if t.status == 'completed'][:3]
-    failed = [t for t in recent_tasks if t.status == 'failed'][:3]
+    completed = [t for t in recent_tasks if t.status == "completed"][:3]
+    failed = [t for t in recent_tasks if t.status == "failed"][:3]
 
     # Cost tracking
     usage_stats = cost_tracker.get_usage_stats(user_id)
@@ -226,8 +208,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_parts = ["*Status*\n"]
 
     # Session info
-    if session_stats['exists']:
-        message_parts.append(f"*Conversation*")
+    if session_stats["exists"]:
+        message_parts.append("*Conversation*")
         message_parts.append(f"Messages: {session_stats['message_count']}")
         message_parts.append(f"User: {session_stats['user_messages']} | Bot: {session_stats['assistant_messages']}")
         message_parts.append(f"Last: {session_stats['last_activity'][:19]}\n")
@@ -257,10 +239,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_parts.append(f"Total requests: {usage_stats['total_requests']}")
     message_parts.append(f"Total cost: ${usage_stats['total_cost']:.2f}")
 
-    await update.message.reply_text(
-        "\n".join(message_parts),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("\n".join(message_parts), parse_mode="Markdown")
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -292,13 +271,13 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Last minute: {rate_stats['requests_last_minute']} / {rate_stats['limit_per_minute']} ({rate_stats['minute_percentage']:.0f}%)
 • Last hour: {rate_stats['requests_last_hour']} / {rate_stats['limit_per_hour']} ({rate_stats['hour_percentage']:.0f}%)"""
 
-    if rate_stats['in_cooldown']:
+    if rate_stats["in_cooldown"]:
         message += f"\n• Cooldown: {rate_stats['cooldown_remaining']}s remaining"
 
     # Add model breakdown if available
-    if cost_stats['model_breakdown']:
+    if cost_stats["model_breakdown"]:
         message += "\n\n*By Model*\n"
-        for model, stats in cost_stats['model_breakdown'].items():
+        for model, stats in cost_stats["model_breakdown"].items():
             message += f"• {model}: {stats['requests']} requests (${stats['cost']:.4f})\n"
 
     message += f"\n\nLast reset: {cost_stats['last_reset'][:19]}"
@@ -317,9 +296,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session_manager.clear_session(user_id)
     logger.info(f"Priority /clear: Cleared session for user {user_id}")
 
-    await update.message.reply_text(
-        "Conversation cleared! Starting fresh."
-    )
+    await update.message.reply_text("Conversation cleared! Starting fresh.")
 
 
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,9 +309,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send acknowledgment immediately
     try:
-        await update.message.reply_text(
-            "Restarting bot... back in a moment."
-        )
+        await update.message.reply_text("Restarting bot... back in a moment.")
     except Exception as e:
         logger.error(f"Failed to send restart acknowledgment: {e}")
 
@@ -363,6 +338,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Restart the bot process
             logger.info("Restarting bot process...")
             import sys
+
             python = sys.executable
             os.execl(python, python, *sys.argv)
 
@@ -370,6 +346,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error during graceful restart: {e}")
             # Try direct restart anyway
             import sys
+
             python = sys.executable
             os.execl(python, python, *sys.argv)
 
@@ -388,17 +365,12 @@ def is_priority_command(message_text: str) -> bool:
         return False
 
     text_lower = message_text.lower().strip()
-    priority_commands = [
-        '/restart', 'restart',
-        '/start', 'start',
-        '/clear', 'clear',
-        '/help', 'help'
-    ]
+    priority_commands = ["/restart", "restart", "/start", "start", "/clear", "clear", "/help", "help"]
 
-    return any(text_lower == cmd or text_lower.startswith(cmd + ' ') for cmd in priority_commands)
+    return any(text_lower == cmd or text_lower.startswith(cmd + " ") for cmd in priority_commands)
 
 
-def extract_workspace_from_message(message: str) -> tuple[Optional[str], str]:
+def extract_workspace_from_message(message: str) -> tuple[str | None, str]:
     """
     Extract workspace path from message if specified
     Returns: (workspace_path, cleaned_message)
@@ -411,7 +383,7 @@ def extract_workspace_from_message(message: str) -> tuple[Optional[str], str]:
     import re
 
     # Pattern: "in <path>, <rest>" or "in <path> <rest>"
-    pattern1 = r'^in\s+([~/\w\-/.]+)[,\s]+(.+)$'
+    pattern1 = r"^in\s+([~/\w\-/.]+)[,\s]+(.+)$"
     match = re.match(pattern1, message, re.IGNORECASE)
     if match:
         workspace = os.path.expanduser(match.group(1).strip())
@@ -419,7 +391,7 @@ def extract_workspace_from_message(message: str) -> tuple[Optional[str], str]:
         return workspace, cleaned
 
     # Pattern: "for repository <path>, <rest>"
-    pattern2 = r'^for\s+(?:repository|repo|project)\s+([~/\w\-/.]+)[,\s]+(.+)$'
+    pattern2 = r"^for\s+(?:repository|repo|project)\s+([~/\w\-/.]+)[,\s]+(.+)$"
     match = re.match(pattern2, message, re.IGNORECASE)
     if match:
         workspace = os.path.expanduser(match.group(1).strip())
@@ -438,23 +410,36 @@ def detect_task_type(message: str) -> str:
 
     # Code task keywords
     code_keywords = [
-        'modify', 'change', 'update', 'fix', 'refactor', 'add',
-        'create', 'build', 'implement', 'write code', 'edit',
-        'commit', 'git', 'file', 'repository', 'repo'
+        "modify",
+        "change",
+        "update",
+        "fix",
+        "refactor",
+        "add",
+        "create",
+        "build",
+        "implement",
+        "write code",
+        "edit",
+        "commit",
+        "git",
+        "file",
+        "repository",
+        "repo",
     ]
 
     # Status query keywords
-    status_keywords = ['status', 'progress', 'tasks', 'running']
+    status_keywords = ["status", "progress", "tasks", "running"]
 
     # Check for status queries
     if any(kw in message_lower for kw in status_keywords):
-        return 'status_query'
+        return "status_query"
 
     # Check for code tasks
     if any(kw in message_lower for kw in code_keywords):
-        return 'code_task'
+        return "code_task"
 
-    return 'chat'
+    return "chat"
 
 
 async def execute_code_task(task: "Task", update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,46 +464,26 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             workspace=Path(task.workspace),
             bot_repo_path=BOT_REPOSITORY,  # Always provide bot context
             model=task.model,
-            pid_callback=save_pid_immediately  # Save PID immediately when process starts
+            pid_callback=save_pid_immediately,  # Save PID immediately when process starts
         )
 
         # Update task with result
         if success:
-            task_manager.update_task(
-                task.task_id,
-                status="completed",
-                result=result
-            )
+            task_manager.update_task(task.task_id, status="completed", result=result)
             logger.info(f"Task {task.task_id} completed successfully")
 
             # Notify user
-            notification = (
-                f"*Task Complete* (#{task.task_id})\n\n"
-                f"{task.description}\n\n"
-                f"**Result:**\n{result}"
-            )
+            notification = f"*Task Complete* (#{task.task_id})\n\n" f"{task.description}\n\n" f"**Result:**\n{result}"
         else:
-            task_manager.update_task(
-                task.task_id,
-                status="failed",
-                error=result
-            )
+            task_manager.update_task(task.task_id, status="failed", error=result)
             logger.error(f"Task {task.task_id} failed: {result}")
 
             # Notify user of failure
-            notification = (
-                f"*Task Failed* (#{task.task_id})\n\n"
-                f"{task.description}\n\n"
-                f"**Error:**\n{result}"
-            )
+            notification = f"*Task Failed* (#{task.task_id})\n\n" f"{task.description}\n\n" f"**Error:**\n{result}"
 
         # Send notification (chunk if needed)
         if len(notification) <= 4096:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=notification,
-                parse_mode="Markdown"
-            )
+            await context.bot.send_message(chat_id=user_id, text=notification, parse_mode="Markdown")
         else:
             # Send description + status first
             header = notification.split("**Result:**\n")[0] if success else notification.split("**Error:**\n")[0]
@@ -526,24 +491,19 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
 
             # Send result/error in chunks
             content = result
-            chunks = [content[i:i+4096] for i in range(0, len(content), 4096)]
+            chunks = [content[i : i + 4096] for i in range(0, len(content), 4096)]
             for chunk in chunks:
                 await context.bot.send_message(chat_id=user_id, text=chunk)
 
     except Exception as e:
         logger.error(f"Task execution error for {task.task_id}: {e}")
-        task_manager.update_task(
-            task.task_id,
-            status="failed",
-            error=str(e)
-        )
+        task_manager.update_task(task.task_id, status="failed", error=str(e))
 
         # Notify user
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"*Task Failed* (#{task.task_id})\n\n"
-                 f"An unexpected error occurred:\n{str(e)}",
-            parse_mode="Markdown"
+            text=f"*Task Failed* (#{task.task_id})\n\n" f"An unexpected error occurred:\n{str(e)}",
+            parse_mode="Markdown",
         )
 
 
@@ -554,8 +514,8 @@ async def show_task_status(user_id: int, update: Update):
 
     # Get recent completed/failed tasks
     recent_tasks = task_manager.get_user_tasks(user_id, limit=5)
-    completed = [t for t in recent_tasks if t.status == 'completed'][:3]
-    failed = [t for t in recent_tasks if t.status == 'failed'][:3]
+    completed = [t for t in recent_tasks if t.status == "completed"][:3]
+    failed = [t for t in recent_tasks if t.status == "failed"][:3]
 
     # Build status message
     message_parts = ["*Task Status*\n"]
@@ -565,9 +525,7 @@ async def show_task_status(user_id: int, update: Update):
         message_parts.append(f"\n*Active Tasks* ({len(active_tasks)}):")
         for task in active_tasks:
             status_icon = "[P]" if task.status == "pending" else "[R]"
-            message_parts.append(
-                f"{status_icon} `#{task.task_id}` - {task.description[:50]}..."
-            )
+            message_parts.append(f"{status_icon} `#{task.task_id}` - {task.description[:50]}...")
     else:
         message_parts.append("\nNo active tasks")
 
@@ -575,43 +533,64 @@ async def show_task_status(user_id: int, update: Update):
     if completed:
         message_parts.append(f"\n\n*Recent Completed* ({len(completed)}):")
         for task in completed:
-            message_parts.append(
-                f"• `#{task.task_id}` - {task.description[:40]}..."
-            )
+            message_parts.append(f"• `#{task.task_id}` - {task.description[:40]}...")
 
     # Recent failed
     if failed:
         message_parts.append(f"\n\n*Recent Failed* ({len(failed)}):")
         for task in failed:
-            message_parts.append(
-                f"• `#{task.task_id}` - {task.description[:40]}..."
-            )
+            message_parts.append(f"• `#{task.task_id}` - {task.description[:40]}...")
 
     message_parts.append("\n\nUse task ID to see details")
 
-    await update.message.reply_text(
-        "\n".join(message_parts),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("\n".join(message_parts), parse_mode="Markdown")
 
 
-async def process_message_async(user_id: int, message_text: str, update: Update, context: ContextTypes.DEFAULT_TYPE, ack_message_id: Optional[int] = None):
+async def process_message_async(
+    user_id: int,
+    message_text: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    ack_message_id: int | None = None,
+):
     """Process message asynchronously in background"""
     try:
         # Get conversation history
         session = session_manager.get_session(user_id)
         history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-        # Invoke orchestrator with text input (no timeout)
-        response = await invoke_orchestrator(
-            user_query=message_text,
-            input_method="text",
-            conversation_history=history,
-            current_workspace=session_manager.get_workspace(user_id),
-            bot_repository=BOT_REPOSITORY,
-            workspace_path=WORKSPACE_PATH,
-            task_manager=task_manager
-        )
+        # Get workspace and discover repositories
+        current_workspace = session_manager.get_workspace(user_id)
+        available_repos = discover_repositories(WORKSPACE_PATH)
+
+        # Check for uncommitted changes blocking work
+        git_tracker = get_git_tracker()
+        target_repo = current_workspace or WORKSPACE_PATH
+        blocking_msg = git_tracker.get_blocking_message(target_repo)
+
+        if blocking_msg:
+            response = blocking_msg
+            background_task_info = None
+        else:
+            # Get active tasks info
+            all_tasks = task_manager.tasks.values()
+            active_tasks_info = [
+                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
+                for t in all_tasks
+                if t.status in ["pending", "in_progress"]
+            ]
+
+            # Ask Claude via API (fast, no file tools needed for routing)
+            response, background_task_info = await ask_claude(
+                user_query=message_text,
+                input_method="text",
+                conversation_history=history,
+                current_workspace=current_workspace,
+                bot_repository=BOT_REPOSITORY,
+                workspace_path=WORKSPACE_PATH,
+                available_repositories=available_repos,
+                active_tasks=active_tasks_info,
+            )
 
         # Delete acknowledgment message if it exists
         if ack_message_id:
@@ -622,34 +601,25 @@ async def process_message_async(user_id: int, message_text: str, update: Update,
 
         if not response:
             # Fallback to direct Claude response
-            logger.warning("Orchestrator returned empty response, using fallback")
+            logger.warning("Claude API returned empty response, using fallback")
             response = await claude_client.send_message(user_id, message_text)
-        elif response.strip() == "":
-            # Handle empty string responses
-            logger.warning("Orchestrator returned empty string, using fallback")
-            response = await claude_client.send_message(user_id, message_text)
+            background_task_info = None
 
-        # Check if response is a BACKGROUND_TASK request
-        if response and response.startswith("BACKGROUND_TASK|"):
-            parts = response.split("|", 2)
-            if len(parts) == 3:
-                _, task_desc, user_message = parts
+        # Check if background task should be created
+        if background_task_info:
+            task_desc = background_task_info["description"]
+            user_message = background_task_info["user_message"]
 
-                # Create background task
-                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                task = task_manager.create_task(
-                    user_id=user_id,
-                    description=task_desc,
-                    workspace=workspace,
-                    model="sonnet"
-                )
+            # Create background task
+            workspace = current_workspace or WORKSPACE_PATH
+            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
 
-                # Submit task to worker pool (non-blocking)
-                logger.info(f"Submitted task {task.task_id} to worker pool")
-                await worker_pool.submit(execute_code_task, task, update, context)
+            # Submit task to worker pool (non-blocking)
+            logger.info(f"Submitted task {task.task_id} to worker pool")
+            await worker_pool.submit(execute_code_task, task, update, context)
 
-                # Send user-facing message
-                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+            # Send user-facing message
+            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
@@ -661,23 +631,15 @@ async def process_message_async(user_id: int, message_text: str, update: Update,
         await worker_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
 
         # Format and send response to user
-        formatted_chunks = format_telegram_response(
-            response,
-            workspace_path=session_manager.get_workspace(user_id)
-        )
+        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
 
         for chunk in formatted_chunks:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=chunk,
-                parse_mode="HTML"
-            )
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error in async message processing for user {user_id}: {e}")
         await context.bot.send_message(
-            chat_id=user_id,
-            text="An error occurred while processing your message. Please try again."
+            chat_id=user_id, text="An error occurred while processing your message. Please try again."
         )
 
 
@@ -737,7 +699,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context=context,
             handler=_handle_message_impl,
             handler_name="priority_text_command",
-            priority=10
+            priority=10,
         )
     else:
         # Queue with normal priority (no acknowledgment - orchestrator responds fast with Haiku)
@@ -747,11 +709,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context=context,
             handler=_handle_message_impl,
             handler_name="text_message",
-            priority=0
+            priority=0,
         )
 
 
-def transcribe_audio(file_path: str) -> Optional[str]:
+def transcribe_audio(file_path: str) -> str | None:
     """Transcribe audio file using Whisper (sync function)"""
     if not WHISPER_AVAILABLE:
         return None
@@ -768,69 +730,77 @@ def transcribe_audio(file_path: str) -> Optional[str]:
         return None
 
 
-async def process_document_async(user_id: int, message_text: str, tmp_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_document_async(
+    user_id: int, message_text: str, tmp_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE
+):
     """Process document asynchronously in background"""
     try:
         # Get conversation history
         session = session_manager.get_session(user_id)
         history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-        # Invoke orchestrator with file context (no timeout)
-        response = await invoke_orchestrator(
-            user_query=message_text,
-            input_method="text",
-            conversation_history=history,
-            current_workspace=session_manager.get_workspace(user_id),
-            bot_repository=BOT_REPOSITORY,
-            workspace_path=WORKSPACE_PATH,
-            task_manager=task_manager
-        )
+        # Get workspace and repos
+        current_workspace = session_manager.get_workspace(user_id)
+        available_repos = discover_repositories(WORKSPACE_PATH)
+
+        # Check git
+        git_tracker = get_git_tracker()
+        target_repo = current_workspace or WORKSPACE_PATH
+        blocking_msg = git_tracker.get_blocking_message(target_repo)
+
+        if blocking_msg:
+            response = blocking_msg
+            background_task_info = None
+        else:
+            # Get active tasks
+            all_tasks = task_manager.tasks.values()
+            active_tasks_info = [
+                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
+                for t in all_tasks
+                if t.status in ["pending", "in_progress"]
+            ]
+
+            # Ask Claude API
+            response, background_task_info = await ask_claude(
+                user_query=message_text,
+                input_method="text",
+                conversation_history=history,
+                current_workspace=current_workspace,
+                bot_repository=BOT_REPOSITORY,
+                workspace_path=WORKSPACE_PATH,
+                available_repositories=available_repos,
+                active_tasks=active_tasks_info,
+            )
 
         if not response:
-            logger.warning("Orchestrator returned empty response (document handler), using fallback")
+            logger.warning("Claude API returned empty response (document), using fallback")
             response = await claude_client.send_message(user_id, message_text)
-        elif response.strip() == "":
-            logger.warning("Orchestrator returned empty string (document handler), using fallback")
-            response = await claude_client.send_message(user_id, message_text)
+            background_task_info = None
 
-        # Check if response is a BACKGROUND_TASK request
-        if response and response.startswith("BACKGROUND_TASK|"):
-            parts = response.split("|", 2)
-            if len(parts) == 3:
-                _, task_desc, user_message = parts
-                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                task = task_manager.create_task(
-                    user_id=user_id,
-                    description=task_desc,
-                    workspace=workspace,
-                    model="sonnet"
-                )
-                logger.info(f"Submitted task {task.task_id} to worker pool (document)")
-                await worker_pool.submit(execute_code_task, task, update, context)
-                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+        # Check if background task should be created
+        if background_task_info:
+            task_desc = background_task_info["description"]
+            user_message = background_task_info["user_message"]
+            workspace = current_workspace or WORKSPACE_PATH
+            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
+            logger.info(f"Submitted task {task.task_id} to worker pool (document)")
+            await worker_pool.submit(execute_code_task, task, update, context)
+            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user
-        formatted_chunks = format_telegram_response(
-            response,
-            workspace_path=session_manager.get_workspace(user_id)
-        )
+        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
 
         for chunk in formatted_chunks:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=chunk,
-                parse_mode="HTML"
-            )
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error in async document processing for user {user_id}: {e}")
         await context.bot.send_message(
-            chat_id=user_id,
-            text="An error occurred while processing your document. Please try again."
+            chat_id=user_id, text="An error occurred while processing your document. Please try again."
         )
     finally:
         # Clean up temp file
@@ -847,9 +817,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Check file size (limit to 20MB for safety)
     if document.file_size > 20 * 1024 * 1024:
-        await update.message.reply_text(
-            "File too large. Maximum size is 20MB."
-        )
+        await update.message.reply_text("File too large. Maximum size is 20MB.")
         return
 
     # Show typing indicator
@@ -870,7 +838,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Read file content (text-based files only)
         try:
-            with open(tmp_path, 'r', encoding='utf-8') as f:
+            with open(tmp_path, encoding="utf-8") as f:
                 file_content = f.read()
         except UnicodeDecodeError:
             # Binary file (PDF, images, etc.) - just provide path
@@ -895,9 +863,7 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
 
     except Exception as e:
         logger.error(f"Document download/prep error: {e}")
-        await update.message.reply_text(
-            "Error downloading file. Please try again."
-        )
+        await update.message.reply_text("Error downloading file. Please try again.")
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -907,78 +873,82 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     await queue_manager.enqueue_message(
-        user_id=user_id,
-        update=update,
-        context=context,
-        handler=_handle_document_impl,
-        handler_name="document"
+        user_id=user_id, update=update, context=context, handler=_handle_document_impl, handler_name="document"
     )
 
 
-async def process_photo_async(user_id: int, message_text: str, tmp_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_photo_async(
+    user_id: int, message_text: str, tmp_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE
+):
     """Process photo asynchronously in background"""
     try:
         # Get conversation history
         session = session_manager.get_session(user_id)
         history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-        # Invoke orchestrator with image context (no timeout)
-        response = await invoke_orchestrator(
-            user_query=message_text,
-            input_method="text",
-            conversation_history=history,
-            current_workspace=session_manager.get_workspace(user_id),
-            bot_repository=BOT_REPOSITORY,
-            workspace_path=WORKSPACE_PATH,
-            task_manager=task_manager,
-            image_path=tmp_path  # Pass image file path
-        )
+        # Get workspace and repos
+        current_workspace = session_manager.get_workspace(user_id)
+        available_repos = discover_repositories(WORKSPACE_PATH)
+
+        # Check git
+        git_tracker = get_git_tracker()
+        target_repo = current_workspace or WORKSPACE_PATH
+        blocking_msg = git_tracker.get_blocking_message(target_repo)
+
+        if blocking_msg:
+            response = blocking_msg
+            background_task_info = None
+        else:
+            # Get active tasks
+            all_tasks = task_manager.tasks.values()
+            active_tasks_info = [
+                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
+                for t in all_tasks
+                if t.status in ["pending", "in_progress"]
+            ]
+
+            # Ask Claude API with image
+            response, background_task_info = await ask_claude(
+                user_query=message_text,
+                input_method="text",
+                conversation_history=history,
+                current_workspace=current_workspace,
+                bot_repository=BOT_REPOSITORY,
+                workspace_path=WORKSPACE_PATH,
+                available_repositories=available_repos,
+                active_tasks=active_tasks_info,
+                image_path=tmp_path,  # Pass image file path
+            )
 
         if not response:
-            logger.warning("Orchestrator returned empty response (photo handler), using fallback")
+            logger.warning("Claude API returned empty response (photo), using fallback")
             response = await claude_client.send_message(user_id, message_text)
-        elif response.strip() == "":
-            logger.warning("Orchestrator returned empty string (photo handler), using fallback")
-            response = await claude_client.send_message(user_id, message_text)
+            background_task_info = None
 
-        # Check if response is a BACKGROUND_TASK request
-        if response and response.startswith("BACKGROUND_TASK|"):
-            parts = response.split("|", 2)
-            if len(parts) == 3:
-                _, task_desc, user_message = parts
-                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                task = task_manager.create_task(
-                    user_id=user_id,
-                    description=task_desc,
-                    workspace=workspace,
-                    model="sonnet"
-                )
-                logger.info(f"Submitted task {task.task_id} to worker pool (photo)")
-                await worker_pool.submit(execute_code_task, task, update, context)
-                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+        # Check if background task should be created
+        if background_task_info:
+            task_desc = background_task_info["description"]
+            user_message = background_task_info["user_message"]
+            workspace = current_workspace or WORKSPACE_PATH
+            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
+            logger.info(f"Submitted task {task.task_id} to worker pool (photo)")
+            await worker_pool.submit(execute_code_task, task, update, context)
+            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user
-        formatted_chunks = format_telegram_response(
-            response,
-            workspace_path=session_manager.get_workspace(user_id)
-        )
+        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
 
         for chunk in formatted_chunks:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=chunk,
-                parse_mode="HTML"
-            )
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error in async photo processing for user {user_id}: {e}")
         await context.bot.send_message(
-            chat_id=user_id,
-            text="An error occurred while processing your image. Please try again."
+            chat_id=user_id, text="An error occurred while processing your image. Please try again."
         )
     finally:
         # Clean up temp file
@@ -1023,9 +993,7 @@ async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     except Exception as e:
         logger.error(f"Photo download/prep error: {e}")
-        await update.message.reply_text(
-            "Error downloading image. Please try again."
-        )
+        await update.message.reply_text("Error downloading image. Please try again.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1035,31 +1003,55 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     await queue_manager.enqueue_message(
-        user_id=user_id,
-        update=update,
-        context=context,
-        handler=_handle_photo_impl,
-        handler_name="photo"
+        user_id=user_id, update=update, context=context, handler=_handle_photo_impl, handler_name="photo"
     )
 
 
-async def process_voice_async(user_id: int, transcription: str, update: Update, context: ContextTypes.DEFAULT_TYPE, ack_message_id: Optional[int] = None):
+async def process_voice_async(
+    user_id: int,
+    transcription: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    ack_message_id: int | None = None,
+):
     """Process voice message asynchronously in background"""
     try:
         # Get conversation history
         session = session_manager.get_session(user_id)
         history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-        # Invoke orchestrator with VOICE input (no timeout)
-        response = await invoke_orchestrator(
-            user_query=transcription,
-            input_method="voice",  # Important: tells orchestrator to be permissive with errors
-            conversation_history=history,
-            current_workspace=session_manager.get_workspace(user_id),
-            bot_repository=BOT_REPOSITORY,
-            workspace_path=WORKSPACE_PATH,
-            task_manager=task_manager
-        )
+        # Get workspace and discover repositories
+        current_workspace = session_manager.get_workspace(user_id)
+        available_repos = discover_repositories(WORKSPACE_PATH)
+
+        # Check for uncommitted changes
+        git_tracker = get_git_tracker()
+        target_repo = current_workspace or WORKSPACE_PATH
+        blocking_msg = git_tracker.get_blocking_message(target_repo)
+
+        if blocking_msg:
+            response = blocking_msg
+            background_task_info = None
+        else:
+            # Get active tasks
+            all_tasks = task_manager.tasks.values()
+            active_tasks_info = [
+                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
+                for t in all_tasks
+                if t.status in ["pending", "in_progress"]
+            ]
+
+            # Ask Claude via API with VOICE input (be permissive with errors)
+            response, background_task_info = await ask_claude(
+                user_query=transcription,
+                input_method="voice",  # Important: tells Claude to be permissive with voice transcription errors
+                conversation_history=history,
+                current_workspace=current_workspace,
+                bot_repository=BOT_REPOSITORY,
+                workspace_path=WORKSPACE_PATH,
+                available_repositories=available_repos,
+                active_tasks=active_tasks_info,
+            )
 
         # Delete acknowledgment message if it exists
         if ack_message_id:
@@ -1069,50 +1061,34 @@ async def process_voice_async(user_id: int, transcription: str, update: Update, 
                 logger.debug(f"Could not delete acknowledgment message: {e}")
 
         if not response:
-            logger.warning("Orchestrator returned empty response (voice handler), using fallback")
+            logger.warning("Claude API returned empty response (voice), using fallback")
             response = await claude_client.send_message(user_id, transcription)
-        elif response.strip() == "":
-            logger.warning("Orchestrator returned empty string (voice handler), using fallback")
-            response = await claude_client.send_message(user_id, transcription)
+            background_task_info = None
 
-        # Check if response is a BACKGROUND_TASK request
-        if response and response.startswith("BACKGROUND_TASK|"):
-            parts = response.split("|", 2)
-            if len(parts) == 3:
-                _, task_desc, user_message = parts
-                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                task = task_manager.create_task(
-                    user_id=user_id,
-                    description=task_desc,
-                    workspace=workspace,
-                    model="sonnet"
-                )
-                logger.info(f"Submitted task {task.task_id} to worker pool (voice)")
-                await worker_pool.submit(execute_code_task, task, update, context)
-                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+        # Check if background task should be created
+        if background_task_info:
+            task_desc = background_task_info["description"]
+            user_message = background_task_info["user_message"]
+            workspace = current_workspace or WORKSPACE_PATH
+            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
+            logger.info(f"Submitted task {task.task_id} to worker pool (voice)")
+            await worker_pool.submit(execute_code_task, task, update, context)
+            response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Queue session writes to worker pool (non-blocking)
         await worker_pool.submit(_async_add_session_message, user_id, "user", transcription)
         await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user
-        formatted_chunks = format_telegram_response(
-            response,
-            workspace_path=session_manager.get_workspace(user_id)
-        )
+        formatted_chunks = format_telegram_response(response, workspace_path=session_manager.get_workspace(user_id))
 
         for chunk in formatted_chunks:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=chunk,
-                parse_mode="HTML"
-            )
+            await context.bot.send_message(chat_id=user_id, text=chunk, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error in async voice processing for user {user_id}: {e}")
         await context.bot.send_message(
-            chat_id=user_id,
-            text="An error occurred while processing your voice message. Please try again."
+            chat_id=user_id, text="An error occurred while processing your voice message. Please try again."
         )
 
 
@@ -1146,9 +1122,7 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
         Path(tmp_path).unlink(missing_ok=True)
 
         if not transcription:
-            await update.message.reply_text(
-                "Transcription failed. Please try again or send text."
-            )
+            await update.message.reply_text("Transcription failed. Please try again or send text.")
             return
 
         logger.info(f"User {user_id} (voice): {transcription}")
@@ -1164,9 +1138,7 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     except Exception as e:
         logger.error(f"Voice download/transcription error: {e}")
-        await update.message.reply_text(
-            "Error processing voice message. Please try again."
-        )
+        await update.message.reply_text("Error processing voice message. Please try again.")
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1176,11 +1148,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     await queue_manager.enqueue_message(
-        user_id=user_id,
-        update=update,
-        context=context,
-        handler=_handle_voice_impl,
-        handler_name="voice"
+        user_id=user_id, update=update, context=context, handler=_handle_voice_impl, handler_name="voice"
     )
 
 
@@ -1189,9 +1157,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
     if update and update.message:
-        await update.message.reply_text(
-            "An error occurred. Please try again."
-        )
+        await update.message.reply_text("An error occurred. Please try again.")
 
 
 async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
@@ -1237,13 +1203,11 @@ async def log_issue_notification(issue, should_escalate: bool):
             log_escalation.add_to_escalation_queue(issue)
 
             # Perform Claude analysis asynchronously
-            analysis_result = await log_escalation.analyze_issues_with_claude(
-                [issue], logs_context=None
-            )
+            analysis_result = await log_escalation.analyze_issues_with_claude([issue], logs_context=None)
 
             if analysis_result.get("analysis"):
                 analysis_msg = f"\n*Claude Analysis*:\n{analysis_result['analysis'][:500]}"
-                if len(analysis_result['analysis']) > 500:
+                if len(analysis_result["analysis"]) > 500:
                     analysis_msg += "\n\n... (truncated)"
 
                 message += analysis_msg
@@ -1251,15 +1215,14 @@ async def log_issue_notification(issue, should_escalate: bool):
                 # Create confirmation request if fixes are suggested
                 if analysis_result.get("suggested_fixes"):
                     conf_id = user_confirmations.create_confirmation_request(
-                        issue=issue,
-                        suggested_action="\n".join(analysis_result['suggested_fixes'][:2]),
-                        confidence=0.85
+                        issue=issue, suggested_action="\n".join(analysis_result["suggested_fixes"][:2]), confidence=0.85
                     )
                     message += f"\n\n✅ `/approve {conf_id}` to apply\n"
                     message += f"❌ `/reject {conf_id}` to skip\n"
 
         # Get bot instance from application (requires global reference)
         from telegram import Bot
+
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
         # Send message in chunks if too long
@@ -1269,27 +1232,15 @@ async def log_issue_notification(issue, should_escalate: bool):
             current_msg = ""
             for part in parts:
                 if len(current_msg) + len(part) > 4000:
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=current_msg,
-                        parse_mode="Markdown"
-                    )
+                    await bot.send_message(chat_id=user_id, text=current_msg, parse_mode="Markdown")
                     current_msg = part
                 else:
                     current_msg += "\n\n" + part if current_msg else part
 
             if current_msg:
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=current_msg,
-                    parse_mode="Markdown"
-                )
+                await bot.send_message(chat_id=user_id, text=current_msg, parse_mode="Markdown")
         else:
-            await bot.send_message(
-                chat_id=user_id,
-                text=message,
-                parse_mode="Markdown"
-            )
+            await bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
 
         logger.info(f"Sent log alert to user {user_id}: {issue.title}")
 
@@ -1314,14 +1265,16 @@ def main():
     # Set bot commands (updates Telegram menu)
     async def post_init(app: Application):
         logger.info("Initializing bot (post_init)...")
-        await app.bot.set_my_commands([
-            BotCommand("start", "Start fresh (clears history)"),
-            BotCommand("help", "Get help"),
-            BotCommand("status", "Check session, tasks & costs"),
-            BotCommand("usage", "Show detailed API usage & costs"),
-            BotCommand("clear", "Clear conversation"),
-            BotCommand("restart", "Restart the bot"),
-        ])
+        await app.bot.set_my_commands(
+            [
+                BotCommand("start", "Start fresh (clears history)"),
+                BotCommand("help", "Get help"),
+                BotCommand("status", "Check session, tasks & costs"),
+                BotCommand("usage", "Show detailed API usage & costs"),
+                BotCommand("clear", "Clear conversation"),
+                BotCommand("restart", "Restart the bot"),
+            ]
+        )
         logger.info("Bot commands registered")
 
     application.post_init = post_init
@@ -1373,18 +1326,10 @@ def main():
     application.add_handler(CommandHandler("restart", restart_command))
 
     # Handle messages
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
-    application.add_handler(
-        MessageHandler(filters.VOICE, handle_voice)
-    )
-    application.add_handler(
-        MessageHandler(filters.Document.ALL, handle_document)
-    )
-    application.add_handler(
-        MessageHandler(filters.PHOTO, handle_photo)
-    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     # Error handler
     application.add_error_handler(error_handler)
