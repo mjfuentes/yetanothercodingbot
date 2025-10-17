@@ -518,62 +518,23 @@ async def show_task_status(user_id: int, update: Update):
     )
 
 
-async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Implementation of message handling (called from queue)"""
-    user_id = update.effective_user.id
-    message_text = update.message.text
-
-    logger.info(f"User {user_id} (text): {message_text}")
-
-    # Check rate limits
-    allowed, error_msg = rate_limiter.check_rate_limit(user_id)
-    if not allowed:
-        await update.message.reply_text(error_msg)
-        return
-
-    # Check cost limits
-    allowed, warning_msg = cost_tracker.check_limits(user_id)
-    if not allowed:
-        await update.message.reply_text(warning_msg)
-        return
-
-    # Record rate limit request
-    rate_limiter.record_request(user_id)
-
-    # Ack already sent in handle_message before queueing
-    # Just track it for deletion later
-    status_msg = None
-
-    # Send warning if approaching limits (but don't block)
-    if warning_msg:
-        await update.message.reply_text(warning_msg)
-
-    # Show typing indicator continuously in background
-    async def keep_typing():
-        try:
-            while True:
-                await update.message.chat.send_action("typing")
-                await asyncio.sleep(4)  # Typing indicator lasts ~5s
-        except:
-            pass
-
-    typing_task = asyncio.create_task(keep_typing())
-
+async def process_message_async(user_id: int, message_text: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process message asynchronously in background"""
     try:
         # Get conversation history
         session = session_manager.get_session(user_id)
         history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
 
-        # Invoke orchestrator with text input
+        # Invoke orchestrator with text input (no timeout)
         response = await invoke_orchestrator(
-        user_query=message_text,
-        input_method="text",
-        conversation_history=history,
-        current_workspace=session_manager.get_workspace(user_id),
-        bot_repository=BOT_REPOSITORY,
-        workspace_path=WORKSPACE_PATH,
-        task_manager=task_manager
-    )
+            user_query=message_text,
+            input_method="text",
+            conversation_history=history,
+            current_workspace=session_manager.get_workspace(user_id),
+            bot_repository=BOT_REPOSITORY,
+            workspace_path=WORKSPACE_PATH,
+            task_manager=task_manager
+        )
 
         if not response:
             # Fallback to direct Claude response
@@ -620,10 +581,6 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
             request_type="chat"
         )
 
-        # Delete status message if it exists
-        if status_msg:
-            await status_msg.delete()
-
         # Format and send response to user
         formatted_chunks = format_telegram_response(
             response,
@@ -631,11 +588,51 @@ async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
         for chunk in formatted_chunks:
-            await update.message.reply_text(chunk, parse_mode="HTML")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=chunk,
+                parse_mode="HTML"
+            )
 
-    finally:
-        # Stop typing indicator
-        typing_task.cancel()
+    except Exception as e:
+        logger.error(f"Error in async message processing for user {user_id}: {e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="An error occurred while processing your message. Please try again."
+        )
+
+
+async def _handle_message_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Implementation of message handling (called from queue)"""
+    user_id = update.effective_user.id
+    message_text = update.message.text
+
+    logger.info(f"User {user_id} (text): {message_text}")
+
+    # Check rate limits
+    allowed, error_msg = rate_limiter.check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text(error_msg)
+        return
+
+    # Check cost limits
+    allowed, warning_msg = cost_tracker.check_limits(user_id)
+    if not allowed:
+        await update.message.reply_text(warning_msg)
+        return
+
+    # Record rate limit request
+    rate_limiter.record_request(user_id)
+
+    # Send warning if approaching limits (but don't block)
+    if warning_msg:
+        await update.message.reply_text(warning_msg)
+
+    # Launch background task for orchestrator processing (no await)
+    # This allows the function to return immediately while work happens async
+    asyncio.create_task(process_message_async(user_id, message_text, update, context))
+
+    logger.info(f"Queued async processing for user {user_id}: {message_text[:60]}...")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -672,6 +669,74 @@ def transcribe_audio(file_path: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Whisper transcription failed: {e}")
         return None
+
+
+async def process_document_async(user_id: int, message_text: str, tmp_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process document asynchronously in background"""
+    try:
+        # Get conversation history
+        session = session_manager.get_session(user_id)
+        history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+        # Invoke orchestrator with file context (no timeout)
+        response = await invoke_orchestrator(
+            user_query=message_text,
+            input_method="text",
+            conversation_history=history,
+            current_workspace=session_manager.get_workspace(user_id),
+            bot_repository=BOT_REPOSITORY,
+            workspace_path=WORKSPACE_PATH,
+            task_manager=task_manager
+        )
+
+        if not response:
+            logger.warning("Orchestrator returned empty response (document handler), using fallback")
+            response = await claude_client.send_message(user_id, message_text)
+        elif response.strip() == "":
+            logger.warning("Orchestrator returned empty string (document handler), using fallback")
+            response = await claude_client.send_message(user_id, message_text)
+
+        # Check if response is a BACKGROUND_TASK request
+        if response and response.startswith("BACKGROUND_TASK|"):
+            parts = response.split("|", 2)
+            if len(parts) == 3:
+                _, task_desc, user_message = parts
+                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                task = task_manager.create_task(
+                    user_id=user_id,
+                    description=task_desc,
+                    workspace=workspace,
+                    model="sonnet"
+                )
+                asyncio.create_task(execute_code_task(task, update, context))
+                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+
+        # Add to conversation history
+        session_manager.add_message(user_id, "user", message_text)
+        session_manager.add_message(user_id, "assistant", response)
+
+        # Format and send response to user
+        formatted_chunks = format_telegram_response(
+            response,
+            workspace_path=session_manager.get_workspace(user_id)
+        )
+
+        for chunk in formatted_chunks:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=chunk,
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in async document processing for user {user_id}: {e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="An error occurred while processing your document. Please try again."
+        )
+    finally:
+        # Clean up temp file
+        Path(tmp_path).unlink(missing_ok=True)
 
 
 async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -725,92 +790,15 @@ async def _handle_document_impl(update: Update, context: ContextTypes.DEFAULT_TY
 
         logger.info(f"User {user_id} (document): {message_text[:100]}...")
 
-        # Send immediate acknowledgment
-        status_msg = await update.message.reply_text("Processing file...")
+        # Launch background task for processing (no await)
+        asyncio.create_task(process_document_async(user_id, message_text, tmp_path, update, context))
 
-        # Show typing indicator continuously in background
-        async def keep_typing():
-            try:
-                while True:
-                    await update.message.chat.send_action("typing")
-                    await asyncio.sleep(4)
-            except:
-                pass
-
-        typing_task = asyncio.create_task(keep_typing())
-
-        try:
-            # Get conversation history
-            session = session_manager.get_session(user_id)
-            history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
-
-            # Invoke orchestrator with file context
-            response = await invoke_orchestrator(
-                user_query=message_text,
-                input_method="text",
-                conversation_history=history,
-                current_workspace=session_manager.get_workspace(user_id),
-                bot_repository=BOT_REPOSITORY,
-                workspace_path=WORKSPACE_PATH,
-                task_manager=task_manager
-            )
-
-            if not response:
-                # Fallback to direct Claude response
-                logger.warning("Orchestrator returned empty response (document handler), using fallback")
-                response = await claude_client.send_message(user_id, message_text)
-            elif response.strip() == "":
-                # Handle empty string responses
-                logger.warning("Orchestrator returned empty string (document handler), using fallback")
-                response = await claude_client.send_message(user_id, message_text)
-
-            # Check if response is a BACKGROUND_TASK request
-            if response and response.startswith("BACKGROUND_TASK|"):
-                parts = response.split("|", 2)
-                if len(parts) == 3:
-                    _, task_desc, user_message = parts
-
-                    # Create background task
-                    workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                    task = task_manager.create_task(
-                        user_id=user_id,
-                        description=task_desc,
-                        workspace=workspace,
-                        model="sonnet"
-                    )
-
-                    # Execute task in background
-                    asyncio.create_task(execute_code_task(task, update, context))
-
-                    # Send user-facing message
-                    response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
-
-            # Add to conversation history
-            session_manager.add_message(user_id, "user", message_text)
-            session_manager.add_message(user_id, "assistant", response)
-
-            # Delete status message
-            await status_msg.delete()
-
-            # Format and send response to user
-            formatted_chunks = format_telegram_response(
-                response,
-                workspace_path=session_manager.get_workspace(user_id)
-            )
-
-            for chunk in formatted_chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
-
-        finally:
-            # Stop typing indicator
-            typing_task.cancel()
-            # Clean up temp file
-            Path(tmp_path).unlink(missing_ok=True)
+        logger.info(f"Queued async processing for document from user {user_id}")
 
     except Exception as e:
-        logger.error(f"Document handling error: {e}")
+        logger.error(f"Document download/prep error: {e}")
         await update.message.reply_text(
-            "Error processing file. Please try again."
+            "Error downloading file. Please try again."
         )
 
 
@@ -827,6 +815,75 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         handler=_handle_document_impl,
         handler_name="document"
     )
+
+
+async def process_photo_async(user_id: int, message_text: str, tmp_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process photo asynchronously in background"""
+    try:
+        # Get conversation history
+        session = session_manager.get_session(user_id)
+        history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+        # Invoke orchestrator with image context (no timeout)
+        response = await invoke_orchestrator(
+            user_query=message_text,
+            input_method="text",
+            conversation_history=history,
+            current_workspace=session_manager.get_workspace(user_id),
+            bot_repository=BOT_REPOSITORY,
+            workspace_path=WORKSPACE_PATH,
+            task_manager=task_manager,
+            image_path=tmp_path  # Pass image file path
+        )
+
+        if not response:
+            logger.warning("Orchestrator returned empty response (photo handler), using fallback")
+            response = await claude_client.send_message(user_id, message_text)
+        elif response.strip() == "":
+            logger.warning("Orchestrator returned empty string (photo handler), using fallback")
+            response = await claude_client.send_message(user_id, message_text)
+
+        # Check if response is a BACKGROUND_TASK request
+        if response and response.startswith("BACKGROUND_TASK|"):
+            parts = response.split("|", 2)
+            if len(parts) == 3:
+                _, task_desc, user_message = parts
+                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                task = task_manager.create_task(
+                    user_id=user_id,
+                    description=task_desc,
+                    workspace=workspace,
+                    model="sonnet"
+                )
+                asyncio.create_task(execute_code_task(task, update, context))
+                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+
+        # Add to conversation history
+        session_manager.add_message(user_id, "user", message_text)
+        session_manager.add_message(user_id, "assistant", response)
+
+        # Format and send response to user
+        formatted_chunks = format_telegram_response(
+            response,
+            workspace_path=session_manager.get_workspace(user_id)
+        )
+
+        for chunk in formatted_chunks:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=chunk,
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in async photo processing for user {user_id}: {e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="An error occurred while processing your image. Please try again."
+        )
+    finally:
+        # Clean up temp file
+        Path(tmp_path).unlink(missing_ok=True)
 
 
 async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -860,93 +917,15 @@ async def _handle_photo_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         logger.info(f"User {user_id} (photo): {message_text}")
 
-        # Send immediate acknowledgment
-        status_msg = await update.message.reply_text("Processing image...")
+        # Launch background task for processing (no await)
+        asyncio.create_task(process_photo_async(user_id, message_text, tmp_path, update, context))
 
-        # Show typing indicator continuously in background
-        async def keep_typing():
-            try:
-                while True:
-                    await update.message.chat.send_action("typing")
-                    await asyncio.sleep(4)
-            except:
-                pass
-
-        typing_task = asyncio.create_task(keep_typing())
-
-        try:
-            # Get conversation history
-            session = session_manager.get_session(user_id)
-            history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
-
-            # Invoke orchestrator with image context
-            response = await invoke_orchestrator(
-                user_query=message_text,
-                input_method="text",
-                conversation_history=history,
-                current_workspace=session_manager.get_workspace(user_id),
-                bot_repository=BOT_REPOSITORY,
-                workspace_path=WORKSPACE_PATH,
-                task_manager=task_manager,
-                image_path=tmp_path  # Pass image file path
-            )
-
-            if not response:
-                # Fallback to direct Claude response
-                logger.warning("Orchestrator returned empty response (photo handler), using fallback")
-                response = await claude_client.send_message(user_id, message_text)
-            elif response.strip() == "":
-                # Handle empty string responses
-                logger.warning("Orchestrator returned empty string (photo handler), using fallback")
-                response = await claude_client.send_message(user_id, message_text)
-
-            # Check if response is a BACKGROUND_TASK request
-            if response and response.startswith("BACKGROUND_TASK|"):
-                parts = response.split("|", 2)
-                if len(parts) == 3:
-                    _, task_desc, user_message = parts
-
-                    # Create background task
-                    workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                    task = task_manager.create_task(
-                        user_id=user_id,
-                        description=task_desc,
-                        workspace=workspace,
-                        model="sonnet"
-                    )
-
-                    # Execute task in background
-                    asyncio.create_task(execute_code_task(task, update, context))
-
-                    # Send user-facing message
-                    response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
-
-            # Add to conversation history
-            session_manager.add_message(user_id, "user", message_text)
-            session_manager.add_message(user_id, "assistant", response)
-
-            # Delete status message
-            await status_msg.delete()
-
-            # Format and send response to user
-            formatted_chunks = format_telegram_response(
-                response,
-                workspace_path=session_manager.get_workspace(user_id)
-            )
-
-            for chunk in formatted_chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
-
-        finally:
-            # Stop typing indicator
-            typing_task.cancel()
-            # Clean up temp file
-            Path(tmp_path).unlink(missing_ok=True)
+        logger.info(f"Queued async processing for photo from user {user_id}")
 
     except Exception as e:
-        logger.error(f"Photo handling error: {e}")
+        logger.error(f"Photo download/prep error: {e}")
         await update.message.reply_text(
-            "Error processing image. Please try again."
+            "Error downloading image. Please try again."
         )
 
 
@@ -963,6 +942,71 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         handler=_handle_photo_impl,
         handler_name="photo"
     )
+
+
+async def process_voice_async(user_id: int, transcription: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process voice message asynchronously in background"""
+    try:
+        # Get conversation history
+        session = session_manager.get_session(user_id)
+        history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
+
+        # Invoke orchestrator with VOICE input (no timeout)
+        response = await invoke_orchestrator(
+            user_query=transcription,
+            input_method="voice",  # Important: tells orchestrator to be permissive with errors
+            conversation_history=history,
+            current_workspace=session_manager.get_workspace(user_id),
+            bot_repository=BOT_REPOSITORY,
+            workspace_path=WORKSPACE_PATH,
+            task_manager=task_manager
+        )
+
+        if not response:
+            logger.warning("Orchestrator returned empty response (voice handler), using fallback")
+            response = await claude_client.send_message(user_id, transcription)
+        elif response.strip() == "":
+            logger.warning("Orchestrator returned empty string (voice handler), using fallback")
+            response = await claude_client.send_message(user_id, transcription)
+
+        # Check if response is a BACKGROUND_TASK request
+        if response and response.startswith("BACKGROUND_TASK|"):
+            parts = response.split("|", 2)
+            if len(parts) == 3:
+                _, task_desc, user_message = parts
+                workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
+                task = task_manager.create_task(
+                    user_id=user_id,
+                    description=task_desc,
+                    workspace=workspace,
+                    model="sonnet"
+                )
+                asyncio.create_task(execute_code_task(task, update, context))
+                response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
+
+        # Add to conversation history
+        session_manager.add_message(user_id, "user", transcription)
+        session_manager.add_message(user_id, "assistant", response)
+
+        # Format and send response to user
+        formatted_chunks = format_telegram_response(
+            response,
+            workspace_path=session_manager.get_workspace(user_id)
+        )
+
+        for chunk in formatted_chunks:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=chunk,
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in async voice processing for user {user_id}: {e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="An error occurred while processing your voice message. Please try again."
+        )
 
 
 async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1002,88 +1046,13 @@ async def _handle_voice_impl(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         logger.info(f"User {user_id} (voice): {transcription}")
 
-        # Send immediate acknowledgment
-        status_msg = await update.message.reply_text("Processing voice message...")
+        # Launch background task for processing (no await)
+        asyncio.create_task(process_voice_async(user_id, transcription, update, context))
 
-        # Show typing indicator continuously in background
-        async def keep_typing():
-            try:
-                while True:
-                    await update.message.chat.send_action("typing")
-                    await asyncio.sleep(4)
-            except:
-                pass
-
-        typing_task = asyncio.create_task(keep_typing())
-
-        try:
-            # Get conversation history
-            session = session_manager.get_session(user_id)
-            history = [{"role": msg.role, "content": msg.content} for msg in session.history] if session else []
-
-            # Invoke orchestrator with VOICE input (be permissive with transcription errors)
-            response = await invoke_orchestrator(
-            user_query=transcription,
-            input_method="voice",  # Important: tells orchestrator to be permissive
-            conversation_history=history,
-            current_workspace=session_manager.get_workspace(user_id),
-            bot_repository=BOT_REPOSITORY,
-            workspace_path=WORKSPACE_PATH,
-            task_manager=task_manager
-        )
-
-            if not response:
-                # Fallback to direct Claude response
-                logger.warning("Orchestrator returned empty response (voice handler), using fallback")
-                response = await claude_client.send_message(user_id, transcription)
-            elif response.strip() == "":
-                # Handle empty string responses
-                logger.warning("Orchestrator returned empty string (voice handler), using fallback")
-                response = await claude_client.send_message(user_id, transcription)
-
-            # Check if response is a BACKGROUND_TASK request
-            if response and response.startswith("BACKGROUND_TASK|"):
-                parts = response.split("|", 2)
-                if len(parts) == 3:
-                    _, task_desc, user_message = parts
-
-                    # Create background task
-                    workspace = session_manager.get_workspace(user_id) or WORKSPACE_PATH
-                    task = task_manager.create_task(
-                        user_id=user_id,
-                        description=task_desc,
-                        workspace=workspace,
-                        model="sonnet"
-                    )
-
-                    # Execute task in background
-                    asyncio.create_task(execute_code_task(task, update, context))
-
-                    # Send user-facing message
-                    response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
-
-            # Add to conversation history
-            session_manager.add_message(user_id, "user", transcription)
-            session_manager.add_message(user_id, "assistant", response)
-
-            # Delete status message
-            await status_msg.delete()
-
-            # Format and send response to user (without showing transcription)
-            formatted_chunks = format_telegram_response(
-                response,
-                workspace_path=session_manager.get_workspace(user_id)
-            )
-
-            for chunk in formatted_chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
-
-        finally:
-            # Stop typing indicator
-            typing_task.cancel()
+        logger.info(f"Queued async processing for voice from user {user_id}")
 
     except Exception as e:
-        logger.error(f"Voice message handling error: {e}")
+        logger.error(f"Voice download/transcription error: {e}")
         await update.message.reply_text(
             "Error processing voice message. Please try again."
         )

@@ -50,7 +50,6 @@ async def invoke_orchestrator(
     current_workspace: Optional[str],
     bot_repository: str,
     workspace_path: str,
-    timeout: int = 300,
     task_manager=None,  # TaskManager instance for background task creation
     image_path: Optional[str] = None  # Path to uploaded image
 ) -> Optional[str]:
@@ -205,11 +204,8 @@ User query: {user_query}"""
                 await process.stdin.drain()
                 process.stdin.close()
 
-            # Wait for response
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
-            )
+            # Wait for response (no timeout - tasks handle their own timeouts)
+            stdout, stderr = await process.communicate()
 
             output = stdout.decode().strip()
 
@@ -235,12 +231,6 @@ User query: {user_query}"""
                 return f"BACKGROUND_TASK|{task_desc}|{user_message}"
 
             return output
-
-        except asyncio.TimeoutError:
-            logger.error(f"Orchestrator timeout after {timeout}s")
-            if process:
-                process.kill()
-            return None
 
     except Exception as e:
         logger.error(f"Error invoking orchestrator: {e}")
