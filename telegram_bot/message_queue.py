@@ -88,10 +88,8 @@ class UserMessageQueue:
                             f"(waited {wait_time:.1f}s, priority={self.current_message.priority})"
                         )
                     else:
-                        # Wait for next normal priority message with timeout
-                        self.current_message = await asyncio.wait_for(
-                            self.queue.get(), timeout=300  # 5 minute timeout per message
-                        )
+                        # Wait for next normal priority message
+                        self.current_message = await self.queue.get()
 
                         wait_time = (datetime.now() - self.current_message.queued_at).total_seconds()
                         logger.info(
@@ -105,9 +103,9 @@ class UserMessageQueue:
 
                     logger.debug(f"User {self.user_id}: Completed message " f"({self.messages_processed} total)")
 
-                except TimeoutError:
-                    # Queue empty for 5 minutes - stop processor
-                    logger.debug(f"User {self.user_id}: Queue timeout, stopping processor")
+                except asyncio.CancelledError:
+                    # Processor cancelled - stop
+                    logger.debug(f"User {self.user_id}: Processor cancelled")
                     break
 
         except asyncio.CancelledError:

@@ -7,7 +7,7 @@ import json
 import logging
 import subprocess
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -51,11 +51,10 @@ class Session:
 class SessionManager:
     """Manages user sessions with persistent storage"""
 
-    def __init__(self, data_dir: str = "data", timeout_minutes: int = 60):
+    def __init__(self, data_dir: str = "data"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
         self.sessions_file = self.data_dir / "sessions.json"
-        self.timeout_minutes = timeout_minutes
         self.sessions: dict[int, Session] = {}
 
         # Load existing sessions
@@ -150,24 +149,9 @@ class SessionManager:
             logger.info(f"Deleted session for user {user_id}")
 
     def cleanup_stale_sessions(self):
-        """Remove sessions that haven't been active recently"""
-        now = datetime.now()
-        timeout = timedelta(minutes=self.timeout_minutes)
-        stale_sessions = []
-
-        for user_id, session in self.sessions.items():
-            last_activity = datetime.fromisoformat(session.last_activity)
-            if now - last_activity > timeout:
-                stale_sessions.append(user_id)
-
-        for user_id in stale_sessions:
-            logger.info(f"Cleaning up stale session for user {user_id}")
-            self.delete_session(user_id)
-
-        if stale_sessions:
-            logger.info(f"Cleaned up {len(stale_sessions)} stale sessions")
-
-        return len(stale_sessions)
+        """Remove sessions that haven't been active recently - now a no-op since sessions don't timeout"""
+        logger.debug("cleanup_stale_sessions called but sessions no longer timeout")
+        return 0
 
     def get_session_stats(self, user_id: int) -> dict:
         """Get statistics about a session"""
@@ -247,7 +231,6 @@ class ClaudeCodeSession:
                 [self.cli_path, "-p", "--model", "haiku", full_prompt],
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
                 cwd=self.workspace,
             )
 
@@ -260,11 +243,6 @@ class ClaudeCodeSession:
             # Add assistant response to history
             self.session_manager.add_message(user_id, "assistant", response)
 
-            return response
-
-        except subprocess.TimeoutExpired:
-            response = "Request timed out after 5 minutes. Please try a simpler query."
-            self.session_manager.add_message(user_id, "assistant", response)
             return response
         except Exception as e:
             logger.error(f"Error communicating with Claude: {e}")

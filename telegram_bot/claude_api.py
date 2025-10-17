@@ -34,16 +34,17 @@ async def ask_claude(
         - usage_info: Dict with 'input_tokens', 'output_tokens' from API response
     """
 
-    # Build context
+    # Build context - minimize tokens
     context = {
         "user_query": user_query,
         "input_method": input_method,
-        "conversation_history": conversation_history[-3:],  # Last 3 messages
+        "conversation_history": conversation_history[-1:],  # Last 1 message only
         "current_workspace": current_workspace or workspace_path,
-        "available_repositories": available_repositories,
         "bot_repository": bot_repository,
-        "active_tasks": active_tasks,
+        # Only include active tasks if there are any
+        "active_tasks": active_tasks if active_tasks else [],
     }
+    # Don't include repos list - saves ~100 tokens
 
     if image_path:
         context["image_path"] = image_path
@@ -196,10 +197,10 @@ User query: {user_query}"""
                 log_path = Path(bot_repository) / "logs" / "bot.log"
                 if log_path.exists():
                     try:
-                        # Read last 200 lines
+                        # Read last 50 lines only (not 200) to reduce tokens
                         with open(log_path) as f:
                             lines = f.readlines()
-                            recent_logs = "".join(lines[-200:])
+                            recent_logs = "".join(lines[-50:])
 
                         messages.append(
                             {"role": "user", "content": f"{user_query}\n\nRecent log content:\n```\n{recent_logs}\n```"}

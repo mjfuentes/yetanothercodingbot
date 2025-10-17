@@ -63,7 +63,7 @@ class ClaudeInteractiveSession:
             logger.error(f"Failed to start interactive session: {e}")
             return False
 
-    async def send_message(self, message: str, timeout: int = 300) -> str | None:
+    async def send_message(self, message: str) -> str | None:
         """Send message to Claude and get response
 
         Note: This closes stdin after sending the message, which causes the claude chat
@@ -81,27 +81,21 @@ class ClaudeInteractiveSession:
             await self.process.stdin.wait_closed()  # Wait for stdin to actually close
             logger.debug(f"Sent message to Claude and closed stdin (task {self.task_id})")
 
-            # Wait for process to complete with timeout
-            try:
-                stdout, stderr = await asyncio.wait_for(self.process.communicate(), timeout=timeout)
+            # Wait for process to complete
+            stdout, stderr = await self.process.communicate()
 
-                response = stdout.decode().strip()
+            response = stdout.decode().strip()
 
-                if stderr:
-                    error_msg = stderr.decode().strip()
-                    if error_msg:
-                        logger.debug(f"Claude stderr (task {self.task_id}): {error_msg}")
+            if stderr:
+                error_msg = stderr.decode().strip()
+                if error_msg:
+                    logger.debug(f"Claude stderr (task {self.task_id}): {error_msg}")
 
-                if response:
-                    logger.debug(f"Received response from Claude (task {self.task_id}): {len(response)} chars")
-                    return response
-                else:
-                    logger.warning(f"Empty response from Claude (task {self.task_id})")
-                    return None
-
-            except TimeoutError:
-                logger.error(f"Response timeout after {timeout}s (task {self.task_id})")
-                await self.terminate()
+            if response:
+                logger.debug(f"Received response from Claude (task {self.task_id}): {len(response)} chars")
+                return response
+            else:
+                logger.warning(f"Empty response from Claude (task {self.task_id})")
                 return None
 
         except Exception as e:
@@ -116,15 +110,12 @@ class ClaudeInteractiveSession:
                 # Check if process is still running
                 if self.process.returncode is None:
                     self.process.terminate()
-                    await asyncio.wait_for(self.process.wait(), timeout=5)
+                    await self.process.wait()
                     logger.info(f"Session terminated for task {self.task_id}")
                 else:
                     logger.info(
                         f"Session already exited for task {self.task_id} (returncode: {self.process.returncode})"
                     )
-            except TimeoutError:
-                self.process.kill()
-                logger.warning(f"Session killed (timeout) for task {self.task_id}")
             except ProcessLookupError:
                 # Process already terminated
                 logger.debug(f"Session process already terminated for task {self.task_id}")

@@ -47,9 +47,7 @@ class GitTracker:
         """
         try:
             # Run git status --porcelain
-            result = subprocess.run(
-                ["git", "status", "--porcelain"], cwd=repo_path, capture_output=True, text=True, timeout=5
-            )
+            result = subprocess.run(["git", "status", "--porcelain"], cwd=repo_path, capture_output=True, text=True)
 
             if result.returncode != 0:
                 return False, "Not a git repository"
@@ -72,10 +70,6 @@ class GitTracker:
                 return True, status
 
             return False, "Clean"
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"Git status timeout for {repo_path}")
-            return False, "Timeout checking status"
         except Exception as e:
             logger.error(f"Error checking git status for {repo_path}: {e}")
             return False, f"Error: {e}"
