@@ -269,7 +269,7 @@ class LocalLogAnalyzer:
                 level=IssueLevel.WARNING,
                 title=f"Repeated timeouts ({timeout_count}x)",
                 description="Multiple timeout events detected. This may indicate network issues or service unavailability.",
-                evidence=[line[1] for line in logs if "timeout" in line.lower()][:3],
+                evidence=[line[1] for ts, line in logs if "timeout" in line.lower()][:3],
                 timestamp=datetime.now(),
                 suggested_action="Check network connectivity and external service availability."
             ))
@@ -282,7 +282,7 @@ class LocalLogAnalyzer:
                 level=IssueLevel.INFO,
                 title="Session cleanup activity",
                 description=f"Detected {cleanup_count} session cleanup operations. This is normal if users have long idle sessions.",
-                evidence=[line[1] for line in logs if "cleanup" in line.lower()][:2],
+                evidence=[line[1] for ts, line in logs if "cleanup" in line.lower()][:2],
                 timestamp=datetime.now(),
             ))
 

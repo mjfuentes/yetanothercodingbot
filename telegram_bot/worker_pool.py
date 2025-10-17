@@ -66,7 +66,8 @@ class WorkerPool:
 
         # Wait for all workers to finish
         try:
-            await asyncio.gather(*self.workers, timeout=30)
+            async with asyncio.timeout(30):
+                await asyncio.gather(*self.workers)
             logger.info("Worker pool stopped successfully")
         except asyncio.TimeoutError:
             logger.warning("Worker pool stop timeout, cancelling workers")
