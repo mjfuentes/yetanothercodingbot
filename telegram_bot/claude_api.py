@@ -87,18 +87,18 @@ When user says "check logs", "show logs", or "?":
 - Focus on actionable errors
 
 BACKGROUND_TASK FORMAT (for coding work):
-Return this EXACT format (pipe-delimited, single line):
-```
+Return this EXACT format (pipe-delimited, single line, NO code blocks):
 BACKGROUND_TASK|<task_description>|<user_message>
-```
+
+IMPORTANT: Do NOT wrap in markdown code blocks (no ```). Return raw format only.
 
 Examples:
-- User: "fix bug in main.py" → `BACKGROUND_TASK|Fix bug in main.py|Fixing the bug.`
-- User: "check code for improvements" → `BACKGROUND_TASK|Analyze codebase for improvements|Scanning the code.`
+- User: "fix bug in main.py" → BACKGROUND_TASK|Fix bug in main.py|Fixing the bug.
+- User: "check code for improvements" → BACKGROUND_TASK|Analyze codebase for improvements|Scanning the code.
 - User: "look at the logs" (with "logs" in query) → Answer directly with log analysis
 - User: "what is asyncio?" → Answer directly (general knowledge)
-- User: "show me the main.py file" → `BACKGROUND_TASK|Show contents of main.py|Reading the file.`
-- User: "how does the bot work?" → `BACKGROUND_TASK|Explain bot architecture from code|Analyzing the code.`
+- User: "show me the main.py file" → BACKGROUND_TASK|Show contents of main.py|Reading the file.
+- User: "how does the bot work?" → BACKGROUND_TASK|Explain bot architecture from code|Analyzing the code.
 
 CRITICAL RULES:
 - ❌ NEVER attempt to read/modify files yourself (you can't - you're using API, not CLI)
@@ -215,13 +215,22 @@ User query: {user_query}"""
 
         logger.info(f"Claude API response: {response_text[:100]}...")
 
-        # Check if response is BACKGROUND_TASK format
-        if response_text.startswith("BACKGROUND_TASK|"):
-            parts = response_text.split("|", 2)
+        # Check if response is BACKGROUND_TASK format (strip markdown code blocks if present)
+        cleaned_response = response_text
+        if response_text.startswith("```") and "\n" in response_text:
+            # Strip markdown code blocks: ```\nBACKGROUND_TASK|...\n```
+            lines = response_text.split("\n")
+            if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
+                cleaned_response = "\n".join(lines[1:-1]).strip()
+            elif len(lines) >= 2 and lines[0].startswith("```"):
+                cleaned_response = "\n".join(lines[1:]).strip()
+
+        if cleaned_response.startswith("BACKGROUND_TASK|"):
+            parts = cleaned_response.split("|", 2)
             if len(parts) == 3:
                 _, task_description, user_message = parts
                 background_task = {"description": task_description.strip(), "user_message": user_message.strip()}
-                return response_text, background_task
+                return cleaned_response, background_task
 
         # Direct answer
         return response_text, None
