@@ -27,6 +27,8 @@ from tasks import TaskManager
 from claude_interactive import ClaudeSessionPool
 from orchestrator import invoke_orchestrator
 from formatter import format_telegram_response
+from cost_tracker import CostTracker
+from rate_limiter import RateLimiter
 
 # Check if whisper is available
 try:
@@ -67,6 +69,8 @@ session_manager = SessionManager(timeout_minutes=SESSION_TIMEOUT_MINUTES)
 claude_client = ClaudeCodeSession(CLAUDE_CLI_PATH, WORKSPACE_PATH, session_manager)
 task_manager = TaskManager()
 claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
+cost_tracker = CostTracker()  # Track API costs
+rate_limiter = RateLimiter()  # Rate limiting
 
 
 async def check_authorization(update: Update) -> bool:
@@ -166,29 +170,63 @@ Or use: /cd /path/to/workspace
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /status command"""
+    """Handle /status command - show session, tasks, and cost info"""
     if not await check_authorization(update):
         return
 
     user_id = update.effective_user.id
-    stats = session_manager.get_session_stats(user_id)
 
-    if not stats['exists']:
-        await update.message.reply_text("📊 No active session. Send a message to start!")
-        return
+    # Session stats
+    session_stats = session_manager.get_session_stats(user_id)
 
-    message = f"""📊 *Session Status*
+    # Task status
+    active_tasks = task_manager.get_active_tasks(user_id)
+    recent_tasks = task_manager.get_user_tasks(user_id, limit=5)
+    completed = [t for t in recent_tasks if t.status == 'completed'][:3]
+    failed = [t for t in recent_tasks if t.status == 'failed'][:3]
 
-💬 Messages: {stats['message_count']}
-👤 User messages: {stats['user_messages']}
-🤖 Assistant messages: {stats['assistant_messages']}
-🕒 Created: {stats['created_at'][:19]}
-⏱️ Last activity: {stats['last_activity'][:19]}
+    # Cost tracking
+    usage_stats = cost_tracker.get_usage_stats(user_id)
 
-Use /clear to reset conversation.
-    """
+    # Build comprehensive status message
+    message_parts = ["📊 *Status Overview*\n"]
 
-    await update.message.reply_text(message, parse_mode="Markdown")
+    # Session info
+    if session_stats['exists']:
+        message_parts.append(f"*💬 Conversation*")
+        message_parts.append(f"Messages: {session_stats['message_count']}")
+        message_parts.append(f"User: {session_stats['user_messages']} | Bot: {session_stats['assistant_messages']}")
+        message_parts.append(f"Last: {session_stats['last_activity'][:19]}\n")
+    else:
+        message_parts.append("*💬 Conversation*: No active session\n")
+
+    # Task status
+    message_parts.append("*🔄 Background Tasks*")
+    if active_tasks:
+        message_parts.append(f"Active: {len(active_tasks)}")
+        for task in active_tasks[:3]:
+            status_icon = "⏳" if task.status == "pending" else "⚙️"
+            message_parts.append(f"{status_icon} `#{task.task_id}` {task.description[:40]}...")
+    else:
+        message_parts.append("Active: None")
+
+    if completed:
+        message_parts.append(f"✅ Recent completed: {len(completed)}")
+    if failed:
+        message_parts.append(f"❌ Recent failed: {len(failed)}")
+    message_parts.append("")
+
+    # Cost info
+    message_parts.append("*💰 API Usage*")
+    message_parts.append(f"Today: ${usage_stats['daily_cost']:.2f} / ${usage_stats['daily_limit']:.2f}")
+    message_parts.append(f"Month: ${usage_stats['monthly_cost']:.2f} / ${usage_stats['monthly_limit']:.2f}")
+    message_parts.append(f"Total requests: {usage_stats['total_requests']}")
+    message_parts.append(f"Total cost: ${usage_stats['total_cost']:.2f}")
+
+    await update.message.reply_text(
+        "\n".join(message_parts),
+        parse_mode="Markdown"
+    )
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -492,8 +530,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"User {user_id} (text): {message_text}")
 
+    # Check rate limits
+    allowed, error_msg = rate_limiter.check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text(f"⚠️ {error_msg}")
+        return
+
+    # Check cost limits
+    allowed, warning_msg = cost_tracker.check_limits(user_id)
+    if not allowed:
+        await update.message.reply_text(f"🚫 {warning_msg}")
+        return
+
+    # Record rate limit request
+    rate_limiter.record_request(user_id)
+
     # Send immediate acknowledgment
     status_msg = await update.message.reply_text("⏳ Working on it...")
+
+    # Send warning if approaching limits (but don't block)
+    if warning_msg:
+        await update.message.reply_text(warning_msg)
 
     # Show typing indicator continuously in background
     async def keep_typing():
@@ -551,6 +608,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add to conversation history
         session_manager.add_message(user_id, "user", message_text)
         session_manager.add_message(user_id, "assistant", response)
+
+        # Record API usage (estimate tokens)
+        input_tokens = cost_tracker.estimate_tokens(message_text)
+        output_tokens = cost_tracker.estimate_tokens(response)
+        cost_tracker.record_usage(
+            user_id=user_id,
+            model="haiku",  # Default model for orchestrator
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            request_type="chat"
+        )
 
         # Delete status message
         await status_msg.delete()
