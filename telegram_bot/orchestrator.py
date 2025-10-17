@@ -54,7 +54,11 @@ async def invoke_orchestrator(
     image_path: Optional[str] = None  # Path to uploaded image
 ) -> Optional[str]:
     """
-    Invoke orchestrator agent via Claude Code
+    Invoke orchestrator agent via Claude Code (fire-and-forget pattern).
+
+    IMPORTANT: This function returns IMMEDIATELY (<100ms) without waiting for
+    Claude Code execution. The orchestrator subprocess runs detached from the
+    parent process, allowing the bot to remain responsive.
 
     Returns:
         User-facing message string, or None on error
@@ -194,44 +198,82 @@ User query: {user_query}"""
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=bot_repository  # Run from bot repo to load .claude/agents/orchestrator.md
+            cwd=bot_repository,  # Run from bot repo to load .claude/agents/orchestrator.md
+            start_new_session=True  # Detach from parent process (fire-and-forget)
         )
 
         try:
-            # Send prompt
+            # Send prompt (non-blocking with timeout for stdin operations)
             if process.stdin:
                 process.stdin.write(f"{prompt}\n".encode())
-                await process.stdin.drain()
+                await asyncio.wait_for(process.stdin.drain(), timeout=5)
                 process.stdin.close()
 
-            # Wait for response (no timeout - tasks handle their own timeouts)
-            stdout, stderr = await process.communicate()
+            logger.info("Orchestrator subprocess started (detached, fire-and-forget)")
 
-            output = stdout.decode().strip()
+            # IMPORTANT: Do NOT call process.communicate() here!
+            # That would block waiting for subprocess completion.
+            # Instead, spawn a background task to collect the response asynchronously.
+            # This allows invoke_orchestrator() to return immediately (<100ms).
 
-            if stderr:
-                error_msg = stderr.decode().strip()
-                if error_msg and not error_msg.startswith("Loading"):
-                    logger.warning(f"Orchestrator stderr: {error_msg}")
+            # Spawn background task to handle response collection
+            asyncio.create_task(_collect_orchestrator_response(process, user_query))
 
-            if not output:
-                logger.error("Empty output from orchestrator")
-                return None
+            # Return immediately - no waiting for Claude Code to finish
+            # The real response will be collected asynchronously in background
+            logger.debug("Returning immediately from orchestrator (response collected in background)")
+            return "Processing your request..."
 
-            logger.info(f"Orchestrator response: {output[:100]}...")
-
-            # Check if this is a background task request
-            if output.startswith("BACKGROUND_TASK:"):
-                lines = output.split('\n', 1)
-                task_desc = lines[0].replace("BACKGROUND_TASK:", "").strip()
-                user_message = lines[1].strip() if len(lines) > 1 else "Task queued for background execution."
-
-                # We'll return a special format that main.py can parse
-                # Format: "BACKGROUND_TASK|description|user_message"
-                return f"BACKGROUND_TASK|{task_desc}|{user_message}"
-
-            return output
+        except Exception as e:
+            logger.error(f"Error starting orchestrator process: {e}")
+            if process:
+                process.kill()
+            return None
 
     except Exception as e:
         logger.error(f"Error invoking orchestrator: {e}")
         return None
+
+
+async def _collect_orchestrator_response(process, user_query: str) -> None:
+    """
+    Background task to collect orchestrator response asynchronously.
+
+    This runs detached from the main request handling, allowing the HTTP
+    response to return immediately while we collect the orchestrator output.
+
+    Args:
+        process: The subprocess running Claude Code
+        user_query: Original user query for logging
+    """
+    try:
+        # Now we can wait for the full response without blocking the bot
+        stdout, stderr = await process.communicate()
+
+        output = stdout.decode().strip()
+
+        if stderr:
+            error_msg = stderr.decode().strip()
+            if error_msg and not error_msg.startswith("Loading"):
+                logger.warning(f"Orchestrator stderr: {error_msg}")
+
+        if not output:
+            logger.error("Empty output from orchestrator")
+            return
+
+        logger.info(f"Orchestrator response collected: {output[:100]}...")
+
+        # Process background tasks if needed
+        if output.startswith("BACKGROUND_TASK:"):
+            logger.info("Background task detected in orchestrator response")
+            # This would be handled by the background task system in main.py
+
+    except Exception as e:
+        logger.error(f"Error collecting orchestrator response: {e}", exc_info=True)
+    finally:
+        # Ensure process is cleaned up
+        try:
+            if process.returncode is None:
+                process.kill()
+        except:
+            pass

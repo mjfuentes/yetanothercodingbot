@@ -32,6 +32,7 @@ from rate_limiter import RateLimiter
 from message_queue import MessageQueueManager
 from log_monitor import LogMonitorManager, MonitoringConfig
 from log_claude_escalation import LogClaudeEscalation, UserConfirmationManager
+from worker_pool import WorkerPool
 
 # Check if whisper is available
 try:
@@ -75,6 +76,7 @@ claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
 cost_tracker = CostTracker()  # Track API costs
 rate_limiter = RateLimiter()  # Rate limiting
 queue_manager = MessageQueueManager()  # Message queue per user
+worker_pool = WorkerPool(max_workers=3)  # Bounded worker pool for background tasks
 
 # Log monitoring system
 log_monitor_config = MonitoringConfig(
@@ -609,8 +611,9 @@ async def process_message_async(user_id: int, message_text: str, update: Update,
                     model="sonnet"
                 )
 
-                # Execute task in background
-                asyncio.create_task(execute_code_task(task, update, context))
+                # Submit task to worker pool (non-blocking)
+                logger.info(f"Submitted task {task.task_id} to worker pool")
+                await worker_pool.submit(execute_code_task, task, update, context)
 
                 # Send user-facing message
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
@@ -777,7 +780,8 @@ async def process_document_async(user_id: int, message_text: str, tmp_path: str,
                     workspace=workspace,
                     model="sonnet"
                 )
-                asyncio.create_task(execute_code_task(task, update, context))
+                logger.info(f"Submitted task {task.task_id} to worker pool (document)")
+                await worker_pool.submit(execute_code_task, task, update, context)
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Add to conversation history
@@ -924,7 +928,8 @@ async def process_photo_async(user_id: int, message_text: str, tmp_path: str, up
                     workspace=workspace,
                     model="sonnet"
                 )
-                asyncio.create_task(execute_code_task(task, update, context))
+                logger.info(f"Submitted task {task.task_id} to worker pool (photo)")
+                await worker_pool.submit(execute_code_task, task, update, context)
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Add to conversation history
@@ -1050,7 +1055,8 @@ async def process_voice_async(user_id: int, transcription: str, update: Update, 
                     workspace=workspace,
                     model="sonnet"
                 )
-                asyncio.create_task(execute_code_task(task, update, context))
+                logger.info(f"Submitted task {task.task_id} to worker pool (voice)")
+                await worker_pool.submit(execute_code_task, task, update, context)
                 response = f"**Background Task Started** (#{task.task_id})\n\n{user_message}\n\nI'll notify you when it's complete!"
 
         # Add to conversation history
@@ -1267,6 +1273,7 @@ def main():
 
     # Set bot commands (updates Telegram menu)
     async def post_init(app: Application):
+        logger.info("Initializing bot (post_init)...")
         await app.bot.set_my_commands([
             BotCommand("start", "Start fresh (clears history)"),
             BotCommand("help", "Get help"),
@@ -1275,15 +1282,23 @@ def main():
             BotCommand("clear", "Clear conversation"),
             BotCommand("restart", "Restart the bot"),
         ])
+        logger.info("Bot commands registered")
 
     application.post_init = post_init
 
-    # Cleanup queues on shutdown
+    # Cleanup and shutdown handler
     async def shutdown(app: Application):
-        logger.info("Shutting down, cleaning up message queues...")
+        logger.info("Shutting down, stopping worker pool...")
+        await worker_pool.stop()
+        logger.info("Worker pool stopped")
+
+        logger.info("Cleaning up message queues...")
         await queue_manager.cleanup_all()
+
         logger.info("Stopping log monitor...")
         await log_monitor_manager.stop()
+
+        logger.info("Shutdown complete")
 
     application.post_stop = shutdown
 
@@ -1292,12 +1307,19 @@ def main():
         logger.info("Starting background log monitoring...")
         await log_monitor_manager.start(log_issue_notification)
 
-    # Hook to start log monitor after post_init
+    # Hook to start worker pool and log monitor after post_init
     original_post_init = application.post_init
 
     async def new_post_init(app: Application):
         if original_post_init:
             await original_post_init(app)
+
+        # Start worker pool for background task execution
+        logger.info("Starting background worker pool...")
+        await worker_pool.start()
+        logger.info(f"Worker pool started with {worker_pool.max_workers} workers")
+
+        # Start log monitoring
         await start_log_monitor(app)
 
     application.post_init = new_post_init
