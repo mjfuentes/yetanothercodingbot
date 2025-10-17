@@ -98,14 +98,22 @@ class ClaudeInteractiveSession:
         """Terminate the session"""
         if self.process:
             try:
-                self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=5)
-                logger.info(f"Session terminated for task {self.task_id}")
+                # Check if process is still running
+                if self.process.returncode is None:
+                    self.process.terminate()
+                    await asyncio.wait_for(self.process.wait(), timeout=5)
+                    logger.info(f"Session terminated for task {self.task_id}")
+                else:
+                    logger.info(f"Session already exited for task {self.task_id} (returncode: {self.process.returncode})")
             except asyncio.TimeoutError:
                 self.process.kill()
                 logger.warning(f"Session killed (timeout) for task {self.task_id}")
+            except ProcessLookupError:
+                # Process already terminated
+                logger.debug(f"Session process already terminated for task {self.task_id}")
             except Exception as e:
-                logger.error(f"Error terminating session: {e}")
+                error_msg = str(e) if str(e) else type(e).__name__
+                logger.error(f"Error terminating session: {error_msg}")
 
             self.process = None
 
@@ -176,9 +184,14 @@ class ClaudeSessionPool:
         description: str,
         workspace: Path,
         bot_repo_path: Optional[str] = None,
-        model: str = "sonnet"
+        model: str = "sonnet",
+        pid_callback: Optional[callable] = None
     ) -> tuple[bool, str, Optional[int]]:
         """Execute a task using session pool
+
+        Args:
+            pid_callback: Optional callback function called with PID when process starts
+                         Format: pid_callback(pid: int)
 
         Returns:
             (success, result, pid) - pid is the Claude process ID if available
@@ -194,13 +207,59 @@ class ClaudeSessionPool:
         self.active_sessions[task_id] = session
 
         try:
-            # Execute with bot context
-            success, result = await session.execute_task(description, bot_repo_path)
+            # Start session first to get PID
+            if not await session.start(task_id):
+                return False, "Failed to start Claude session", None
 
-            # Get PID if process is still alive
+            # Call callback with PID immediately after process starts
             pid = session.process.pid if session.process else None
+            if pid and pid_callback:
+                try:
+                    pid_callback(pid)
+                except Exception as e:
+                    logger.error(f"Error in PID callback: {e}")
 
-            return success, result, pid
+            # Build context and execute task
+            bot_context = ""
+            if bot_repo_path:
+                bot_context = f"""
+CONTEXT: You are a Telegram bot powered by Claude Code. When users say "you", "your code", or "the bot", they're referring to your own codebase.
+
+Your code lives at: {bot_repo_path}
+Structure:
+- telegram_bot/main.py - Bot entry point, message handlers, routing logic
+- telegram_bot/session.py - Session & conversation history management
+- telegram_bot/tasks.py - Background task tracking system
+- telegram_bot/claude_interactive.py - Interactive Claude sessions (YOU are being invoked from here!)
+- data/ - Persistent storage (sessions.json, tasks.json)
+- logs/ - Application logs
+
+Use your natural language understanding to determine if the user wants you to modify your own code or work on a different project."""
+
+            prompt = f"""{bot_context}
+
+User request: {description}
+
+Working directory: {workspace}
+You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
+
+Complete the task and provide a concise summary of what you did."""
+
+            # Execute task
+            response = await session.send_message(prompt)
+
+            # Cleanup
+            await session.terminate()
+
+            if response:
+                return True, response, pid
+            else:
+                return False, "No response from Claude", pid
+
+        except Exception as e:
+            logger.error(f"Task execution error: {e}")
+            await session.terminate()
+            return False, f"Error: {str(e)}", None
 
         finally:
             # Cleanup

@@ -311,11 +311,12 @@ class LocalLogAnalyzer:
                 level=IssueLevel.INFO,
                 title="Deprecation warnings found",
                 description=f"Found {deprecation_count} deprecation warnings. Update dependencies to stay current.",
-                evidence=[l[1] for l in logs if "deprecat" in l.lower()][:2],
+                evidence=[line for ts, line in logs if "deprecat" in line.lower()][:2],
                 timestamp=datetime.now(),
                 suggested_action="Run 'pip list --outdated' and update packages."
             ))
 
+        self.issues.extend(recommendations)
         return recommendations
 
     def get_critical_issues(self) -> List[LogIssue]:

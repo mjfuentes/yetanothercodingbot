@@ -207,8 +207,17 @@ User query: {user_query}"""
 
             logger.info("Waiting for orchestrator response...")
 
-            # Wait for orchestrator response (Haiku is fast)
-            stdout, stderr = await process.communicate()
+            # Wait for orchestrator response with timeout (Haiku should be fast: 1-3s)
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=30.0  # 30 second timeout for Haiku
+                )
+            except asyncio.TimeoutError:
+                logger.error("Orchestrator timeout after 30s")
+                process.kill()
+                await process.wait()
+                return "Request took too long. Try asking a simpler question or breaking it into steps."
 
             output = stdout.decode().strip()
 
@@ -224,10 +233,21 @@ User query: {user_query}"""
             logger.info(f"Orchestrator response: {output[:100]}...")
             return output
 
+        except asyncio.TimeoutError:
+            # Catch timeout from outer try block
+            logger.error("Orchestrator process timeout")
+            if process:
+                process.kill()
+                await process.wait()
+            return "Request timeout. Please try again."
         except Exception as e:
             logger.error(f"Error starting orchestrator process: {e}")
             if process:
-                process.kill()
+                try:
+                    process.kill()
+                    await process.wait()
+                except:
+                    pass
             return None
 
     except Exception as e:

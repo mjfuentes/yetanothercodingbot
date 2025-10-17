@@ -466,19 +466,21 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
         task_manager.update_task(task.task_id, status="in_progress")
         logger.info(f"Starting task execution: {task.task_id} in {task.workspace}")
 
+        # Define PID callback to save PID immediately when process starts
+        def save_pid_immediately(pid: int):
+            """Called by claude_pool as soon as process starts"""
+            task_manager.update_task(task.task_id, pid=pid)
+            logger.info(f"Task {task.task_id} process started with PID {pid}")
+
         # Execute using Claude session pool with bot context
         success, result, pid = await claude_pool.execute_task(
             task_id=task.task_id,
             description=task.description,
             workspace=Path(task.workspace),
             bot_repo_path=BOT_REPOSITORY,  # Always provide bot context
-            model=task.model
+            model=task.model,
+            pid_callback=save_pid_immediately  # Save PID immediately when process starts
         )
-
-        # Store PID for task persistence
-        if pid:
-            task_manager.update_task(task.task_id, pid=pid)
-            logger.info(f"Task {task.task_id} running with PID {pid}")
 
         # Update task with result
         if success:
