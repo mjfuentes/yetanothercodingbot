@@ -219,3 +219,45 @@ class TaskManager:
         failed_tasks.sort(key=lambda t: t.created_at, reverse=True)
 
         return failed_tasks[:limit]
+
+    def clear_old_failed_tasks(self, user_id: int, older_than_hours: int = 24):
+        """
+        Clear old failed tasks for a user to prevent clutter in status display.
+        Only removes tasks older than the specified hours.
+
+        Args:
+            user_id: User ID to clear tasks for
+            older_than_hours: Only clear tasks older than this many hours (default: 24)
+
+        Returns:
+            Number of tasks cleared
+        """
+        from datetime import datetime, timedelta
+
+        cutoff_time = datetime.now() - timedelta(hours=older_than_hours)
+        cleared_count = 0
+
+        # Find tasks to remove
+        tasks_to_remove = []
+        for task_id, task in self.tasks.items():
+            if task.user_id == user_id and task.status == "failed":
+                try:
+                    task_time = datetime.fromisoformat(task.created_at)
+                    if task_time < cutoff_time:
+                        tasks_to_remove.append(task_id)
+                except ValueError:
+                    # If we can't parse the timestamp, skip this task
+                    logger.warning(f"Could not parse timestamp for task {task_id}: {task.created_at}")
+                    continue
+
+        # Remove old failed tasks
+        for task_id in tasks_to_remove:
+            del self.tasks[task_id]
+            cleared_count += 1
+            logger.info(f"Cleared old failed task {task_id}")
+
+        if cleared_count > 0:
+            self._save_tasks()
+            logger.info(f"Cleared {cleared_count} old failed tasks for user {user_id}")
+
+        return cleared_count

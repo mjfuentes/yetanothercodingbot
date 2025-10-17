@@ -201,6 +201,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /retry - Retry failed tasks
 /start - Fresh conversation
 /clear - Reset history
+/clear errors - Clear all failed tasks
 
 <b>What I can do</b>
 • Answer questions &amp; explain concepts
@@ -213,6 +214,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>Rate Limits</b>
 30 req/min, 500 req/hour
 Use /usage to check spending
+
+<b>Note</b>
+/status auto-clears errors older than 24h
     """
 
     await update.message.reply_text(help_text, parse_mode="HTML")
@@ -224,6 +228,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+
+    # Clean up old failed tasks (older than 24 hours) to prevent clutter
+    task_manager.clear_old_failed_tasks(user_id, older_than_hours=24)
 
     # Get active tasks only
     active_tasks = task_manager.get_active_tasks(user_id)
@@ -451,6 +458,24 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+
+    # Check if user wants to clear errors specifically
+    if context.args and len(context.args) > 0 and context.args[0].lower() == "errors":
+        # Clear all failed tasks immediately
+        all_failed = task_manager.get_failed_tasks(user_id, limit=1000)
+        cleared_count = 0
+        for task in all_failed:
+            if task.task_id in task_manager.tasks:
+                del task_manager.tasks[task.task_id]
+                cleared_count += 1
+
+        if cleared_count > 0:
+            task_manager._save_tasks()
+            logger.info(f"Manually cleared {cleared_count} failed tasks for user {user_id}")
+            await update.message.reply_text(f"Cleared {cleared_count} failed task(s) from history.")
+        else:
+            await update.message.reply_text("No failed tasks to clear!")
+        return
 
     # Clear the session immediately (bypasses queue)
     session_manager.clear_session(user_id)
