@@ -26,6 +26,7 @@ from session import ClaudeCodeSession, SessionManager
 from tasks import Task, TaskManager
 from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from tool_usage_tracker import ToolUsageTracker
 from worker_pool import WorkerPool
 
 # Check if whisper is available
@@ -71,7 +72,8 @@ if not WHISPER_AVAILABLE:
 session_manager = SessionManager()
 claude_client = ClaudeCodeSession(CLAUDE_CLI_PATH, WORKSPACE_PATH, session_manager)
 task_manager = TaskManager()
-claude_pool = ClaudeSessionPool()  # No default workspace - uses task.workspace
+tool_usage_tracker = ToolUsageTracker()  # Track tool usage and agent status
+claude_pool = ClaudeSessionPool(usage_tracker=tool_usage_tracker)  # No default workspace - uses task.workspace
 cost_tracker = CostTracker()  # Track API costs
 rate_limiter = RateLimiter()  # Rate limiting
 queue_manager = MessageQueueManager()  # Message queue per user
@@ -89,6 +91,29 @@ log_monitor_config = MonitoringConfig(
 log_monitor_manager = LogMonitorManager(log_monitor_config)
 log_escalation = LogClaudeEscalation(BOT_REPOSITORY)
 user_confirmations = UserConfirmationManager()
+
+
+# Register tool usage tracking hooks
+def log_tool_start(task_id: str, tool_name: str, parameters: dict):
+    """Hook: Log when a tool starts"""
+    logger.debug(f"Tool started: {task_id} - {tool_name}")
+
+
+def log_tool_complete(task_id: str, tool_name: str, duration_ms: float, success: bool, error: str | None):
+    """Hook: Log when a tool completes"""
+    status = "success" if success else "failed"
+    logger.info(f"Tool completed: {task_id} - {tool_name} ({duration_ms:.2f}ms, {status})")
+
+
+def log_status_change(task_id: str, status: str, message: str | None):
+    """Hook: Log agent status changes"""
+    logger.info(f"Agent status: {task_id} - {status} {f'({message})' if message else ''}")
+
+
+# Register hooks with tracker
+tool_usage_tracker.register_tool_start_hook(log_tool_start)
+tool_usage_tracker.register_tool_complete_hook(log_tool_complete)
+tool_usage_tracker.register_status_change_hook(log_status_change)
 
 
 async def send_formatted_response(

@@ -2,6 +2,7 @@
 Interactive Claude Code session handler
 Phase 3-4: Full tool access for code operations
 Enhanced with workflow enforcement for testing and commits
+Enhanced with tool usage tracking via hooks
 """
 
 import asyncio
@@ -10,6 +11,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from tool_usage_tracker import ToolUsageTracker
 from workflow_enforcer import WorkflowEnforcer
 
 logger = logging.getLogger(__name__)
@@ -21,19 +23,30 @@ class ClaudeInteractiveSession:
     Unlike non-interactive mode, this can use Read, Write, Edit, Bash, etc.
     """
 
-    def __init__(self, workspace: Path, model: str = "sonnet", enforce_workflow: bool = True):
+    def __init__(
+        self,
+        workspace: Path,
+        model: str = "sonnet",
+        enforce_workflow: bool = True,
+        usage_tracker: ToolUsageTracker | None = None,
+    ):
         self.workspace = workspace
         self.model = model
         self.process: subprocess.Popen | None = None
         self.task_id: str | None = None
         self.enforce_workflow = enforce_workflow
         self.workflow_enforcer = WorkflowEnforcer(workspace) if enforce_workflow else None
+        self.usage_tracker = usage_tracker
 
     async def start(self, task_id: str):
         """Start interactive Claude session"""
         self.task_id = task_id
 
         try:
+            # Record agent status change
+            if self.usage_tracker:
+                self.usage_tracker.record_status_change(task_id, "started", "Starting Claude interactive session")
+
             # Start Claude in interactive mode with auto-approval for background tasks
             cmd = [
                 "claude",
@@ -57,10 +70,25 @@ class ClaudeInteractiveSession:
             )
 
             logger.info(f"Interactive session started (PID: {self.process.pid})")
+
+            # Record successful start with PID
+            if self.usage_tracker:
+                self.usage_tracker.record_status_change(
+                    task_id,
+                    "started",
+                    f"Session started with PID {self.process.pid}",
+                    metadata={"pid": self.process.pid},
+                )
+
             return True
 
         except Exception as e:
             logger.error(f"Failed to start interactive session: {e}")
+
+            # Record failure
+            if self.usage_tracker:
+                self.usage_tracker.record_status_change(task_id, "failed", f"Failed to start session: {str(e)}")
+
             return False
 
     async def send_message(self, message: str) -> str | None:
@@ -203,9 +231,12 @@ Complete the task and provide a concise summary of what you did."""
 class ClaudeSessionPool:
     """Pool of Claude sessions for concurrent task execution"""
 
-    def __init__(self, max_concurrent: int = 3, enforce_workflow: bool = True):
+    def __init__(
+        self, max_concurrent: int = 3, enforce_workflow: bool = True, usage_tracker: ToolUsageTracker | None = None
+    ):
         self.max_concurrent = max_concurrent
         self.enforce_workflow = enforce_workflow
+        self.usage_tracker = usage_tracker
         self.active_sessions: dict[str, ClaudeInteractiveSession] = {}
 
     async def execute_task(
@@ -231,8 +262,10 @@ class ClaudeSessionPool:
         while len(self.active_sessions) >= self.max_concurrent:
             await asyncio.sleep(1)
 
-        # Create session with specified workspace and workflow enforcement
-        session = ClaudeInteractiveSession(workspace, model, enforce_workflow=self.enforce_workflow)
+        # Create session with specified workspace, workflow enforcement, and usage tracker
+        session = ClaudeInteractiveSession(
+            workspace, model, enforce_workflow=self.enforce_workflow, usage_tracker=self.usage_tracker
+        )
         session.task_id = task_id
         self.active_sessions[task_id] = session
 
@@ -301,14 +334,34 @@ Complete the task and provide a concise summary of what you did."""
 
                 if not success:
                     logger.warning(f"Workflow enforcement failed for task {task_id}")
+
+                    # Record workflow failure
+                    if self.usage_tracker:
+                        self.usage_tracker.record_status_change(task_id, "failed", "Workflow enforcement failed")
+
                     return False, response + workflow_result, pid
                 else:
                     logger.info(f"Workflow enforcement passed for task {task_id}")
+
+                    # Record workflow success
+                    if self.usage_tracker:
+                        self.usage_tracker.record_status_change(
+                            task_id, "completed", "Task completed with workflow enforcement"
+                        )
+
+            # Record completion
+            if self.usage_tracker:
+                self.usage_tracker.record_status_change(task_id, "completed", "Task completed successfully")
 
             return True, response + workflow_result, pid
 
         except Exception as e:
             logger.error(f"Task execution error: {e}")
+
+            # Record failure
+            if self.usage_tracker:
+                self.usage_tracker.record_status_change(task_id, "failed", f"Task execution error: {str(e)}")
+
             await session.terminate()
             return False, f"Error: {str(e)}", None
 
