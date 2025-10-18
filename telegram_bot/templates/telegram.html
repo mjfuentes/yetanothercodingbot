@@ -6,12 +6,23 @@
     <title>Telegram Web - AgentLab Bot</title>
     <style>
         :root {
-            --bg-primary: #0a0e17;
-            --bg-secondary: #151922;
-            --text-primary: #e4e6eb;
-            --text-secondary: #a8adb7;
-            --accent-blue: #3b82f6;
-            --border-color: #2d3748;
+            /* Light theme (Claude.ai inspired) */
+            --bg-primary: #f5f1eb;
+            --bg-secondary: #fffef9;
+            --text-primary: #3d3025;
+            --text-secondary: #6b5a47;
+            --accent-blue: #6b8cc7;
+            --border-color: #e5dfd5;
+        }
+
+        /* Dark theme */
+        [data-theme="dark"] {
+            --bg-primary: #1a1614;
+            --bg-secondary: #242220;
+            --text-primary: #e8e3db;
+            --text-secondary: #b8b0a4;
+            --accent-blue: #83a1d4;
+            --border-color: #3a3633;
         }
 
         * {
@@ -92,6 +103,31 @@
             border-color: var(--accent-blue);
         }
 
+        .theme-toggle-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 2.5rem;
+        }
+
+        .theme-toggle-btn:hover {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .theme-toggle-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
         .telegram-container {
             width: 100%;
             height: calc(100vh - 73px);
@@ -168,6 +204,9 @@
             <span class="subtitle">AgentLab Bot Interface</span>
         </div>
         <div class="header-right">
+            <button class="theme-toggle-btn" onclick="toggleTheme()" id="themeToggleBtn" title="Toggle theme">
+                🌙
+            </button>
             <a href="/" class="btn">📊 Dashboard</a>
             <button class="btn" onclick="reloadTelegram()">🔄 Reload</button>
         </div>
@@ -194,6 +233,55 @@
     </div>
 
     <script>
+        // Initialize theme on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeTheme();
+        });
+
+        function initializeTheme() {
+            const savedTheme = localStorage.getItem('telegram-theme');
+            const btn = document.getElementById('themeToggleBtn');
+
+            if (savedTheme) {
+                applyTheme(savedTheme, btn);
+            } else {
+                // Check system preference
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                applyTheme(prefersDark ? 'dark' : 'light', btn);
+            }
+
+            // Listen for system theme changes
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                if (!localStorage.getItem('telegram-theme')) {
+                    applyTheme(e.matches ? 'dark' : 'light', btn);
+                }
+            });
+        }
+
+        function toggleTheme() {
+            const html = document.documentElement;
+            const btn = document.getElementById('themeToggleBtn');
+            const currentTheme = html.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            localStorage.setItem('telegram-theme', newTheme);
+            applyTheme(newTheme, btn);
+        }
+
+        function applyTheme(theme, btn) {
+            const html = document.documentElement;
+
+            if (theme === 'dark') {
+                html.setAttribute('data-theme', 'dark');
+                btn.textContent = '☀️';
+                btn.classList.add('active');
+            } else {
+                html.removeAttribute('data-theme');
+                btn.textContent = '🌙';
+                btn.classList.remove('active');
+            }
+        }
+
         function hideLoading() {
             const loading = document.getElementById('loading');
             if (loading) {
