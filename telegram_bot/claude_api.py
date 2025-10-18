@@ -69,9 +69,9 @@ def detect_prompt_injection(text: str) -> tuple[bool, str | None]:
 
     # Suspicious patterns that indicate prompt manipulation attempts
     injection_patterns = [
-        (r"\bignore\b.{0,20}\binstructions?\b", "Instruction override attempt"),
-        (r"\bdisregard\b.{0,20}\binstructions?\b", "Instruction override attempt"),
-        (r"\bforget\b.{0,20}\binstructions?\b", "Instruction override attempt"),
+        (r"\bignore\b.{0,50}\b(instructions?|previous|above)", "Instruction override attempt"),
+        (r"\bdisregard\b.{0,50}\b(instructions?|previous)", "Instruction override attempt"),
+        (r"\bforget\b.{0,50}\b(instructions?|previous|what|said)", "Instruction override attempt"),
         (r"new instructions?:", "Instruction injection attempt"),
         (r"system:?\s*(you (are|must|should)|prompt)", "System role manipulation"),
         (r"<\|im_start\|>", "System prompt injection"),
