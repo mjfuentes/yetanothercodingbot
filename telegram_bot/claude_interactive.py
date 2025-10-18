@@ -7,6 +7,7 @@ Enhanced with tool usage tracking via hooks
 
 import asyncio
 import logging
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -58,8 +59,6 @@ class ClaudeInteractiveSession:
                 self.model,
                 "--permission-mode",
                 "bypassPermissions",  # Auto-approve file operations
-                "--session-id",
-                task_id,  # Use task_id as session ID for tracking
             ]
 
             # Add agent flag if specified
@@ -72,12 +71,18 @@ class ClaudeInteractiveSession:
             if self.agent:
                 logger.info(f"Agent: {self.agent}")
 
+            # Set SESSION_ID environment variable to match task_id for hook logging
+            # (Claude Code hooks can access this to organize logs by task)
+            env = os.environ.copy()
+            env["SESSION_ID"] = task_id
+
             self.process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.workspace),
+                env=env,
             )
 
             logger.info(f"Interactive session started (PID: {self.process.pid})")
