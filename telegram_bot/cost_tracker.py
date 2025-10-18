@@ -6,7 +6,6 @@ Phase 8: Usage API integration for actual usage tracking
 
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -372,54 +371,8 @@ class CostTracker:
             (success, message) tuple
         """
         try:
-            # Import here to avoid circular dependency
-            from usage_api import ClaudeUsageAPI, format_cost_summary, format_usage_summary
-
-            # Check if admin API key is configured
-            admin_key = os.getenv("ANTHROPIC_ADMIN_API_KEY")
-            if not admin_key:
-                return False, "ANTHROPIC_ADMIN_API_KEY not configured. Set it in .env to enable usage sync."
-
-            # Initialize Usage API client
-            usage_api = ClaudeUsageAPI(admin_api_key=admin_key)
-
-            # Get current month usage and costs
-            logger.info("Fetching usage data from Anthropic Usage API...")
-            usage_data = usage_api.get_current_month_usage()
-            cost_data = usage_api.get_current_month_costs()
-
-            # Format summaries
-            usage_summary = format_usage_summary(usage_data)
-            cost_summary = format_cost_summary(cost_data)
-
-            # Build response message
-            message = "Usage API Sync Complete\n\n"
-            message += f"{usage_summary}\n\n"
-            message += f"{cost_summary}\n\n"
-
-            # Extract actual monthly cost from API
-            actual_monthly_cost = float(cost_data.get("total_cost", "0.00"))
-
-            # Compare with local tracking
-            total_local_monthly = sum(usage.monthly_cost for usage in self.users.values())
-
-            message += "\nComparison:\n"
-            message += f"Actual (Anthropic API): ${actual_monthly_cost:.2f}\n"
-            message += f"Local tracking: ${total_local_monthly:.2f}\n"
-
-            diff = abs(actual_monthly_cost - total_local_monthly)
-            if diff < 0.01:
-                message += "✓ Tracking is accurate\n"
-            elif diff < actual_monthly_cost * 0.1:  # Within 10%
-                message += f"⚠ Small difference: ${diff:.2f}\n"
-            else:
-                message += f"⚠ Large difference: ${diff:.2f} - check tracking\n"
-
-            logger.info(
-                f"Usage API sync completed: Actual=${actual_monthly_cost:.2f}, Local=${total_local_monthly:.2f}"
-            )
-            return True, message
-
+            # Admin API functionality removed - usage_api.py deleted
+            return False, "Usage API sync not implemented"
         except Exception as e:
             error_msg = f"Error syncing with Usage API: {str(e)}"
             logger.error(error_msg)
