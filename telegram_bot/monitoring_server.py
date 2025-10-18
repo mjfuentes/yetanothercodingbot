@@ -100,6 +100,63 @@ def task_metrics():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/tasks/<task_id>/tool-usage")
+def task_tool_usage(task_id):
+    """Get tool usage for a specific task from session logs"""
+    try:
+        import json
+
+        # Session logs are stored in logs/sessions/{task_id}/
+        session_dir = Path(sessions_dir) / task_id
+        summary_file = session_dir / "summary.json"
+        pre_tool_file = session_dir / "pre_tool_use.jsonl"
+
+        if not summary_file.exists():
+            return jsonify({"error": "No session logs found for this task"}), 404
+
+        # Read summary for aggregated stats
+        with open(summary_file) as f:
+            summary = json.load(f)
+
+        # Read pre_tool_use for detailed tool calls (including Task tool for worker delegation)
+        tool_calls = []
+        worker_chain = []
+
+        if pre_tool_file.exists():
+            with open(pre_tool_file) as f:
+                for line in f:
+                    if line.strip():
+                        entry = json.load(line)
+                        tool_calls.append(entry)
+
+                        # Track worker spawning (Task tool calls)
+                        if entry.get("tool") == "Task":
+                            params = entry.get("parameters", {})
+                            subagent_type = params.get("subagent_type")
+                            description = params.get("description", "")
+                            if subagent_type:
+                                worker_chain.append(
+                                    {
+                                        "worker": subagent_type,
+                                        "description": description,
+                                        "timestamp": entry.get("timestamp"),
+                                    }
+                                )
+
+        return jsonify(
+            {
+                "task_id": task_id,
+                "summary": summary,
+                "tool_calls": tool_calls,
+                "worker_chain": worker_chain,
+                "has_logs": True,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting tool usage for task {task_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/tasks/activity")
 def task_activity():
     """Get recent task activity for live feed"""

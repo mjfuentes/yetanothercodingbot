@@ -1163,15 +1163,14 @@
                     document.getElementById('taskActivityLog').innerHTML = '<div class="no-data">No activity yet</div>';
                 }
 
-                // Fetch session tool usage for this task
-                const sessionId = task.task_id; // Assuming task_id == session_id
-                const sessionResponse = await fetch(`/api/hooks/session/${sessionId}`);
+                // Fetch tool usage and worker chain for this task
+                const toolUsageResponse = await fetch(`/api/tasks/${taskId}/tool-usage`);
 
-                if (sessionResponse.ok) {
-                    const session = await sessionResponse.json();
-                    renderTaskToolUsage(session);
+                if (toolUsageResponse.ok) {
+                    const toolData = await toolUsageResponse.json();
+                    renderTaskToolUsage(toolData);
                 } else {
-                    document.getElementById('taskToolUsage').innerHTML = '<div class="no-data">No tool usage data available</div>';
+                    document.getElementById('taskToolUsage').innerHTML = '<div class="no-data">No tool usage data available yet</div>';
                 }
 
             } catch (error) {
@@ -1181,11 +1180,11 @@
             }
         }
 
-        function renderTaskToolUsage(session) {
+        function renderTaskToolUsage(toolData) {
             const container = document.getElementById('taskToolUsage');
 
-            if (!session.summary || !session.summary.tools_by_type) {
-                container.innerHTML = '<div class="no-data">No tool usage data</div>';
+            if (!toolData.summary || !toolData.summary.tools_by_type) {
+                container.innerHTML = '<div class="no-data">No tool usage data available yet</div>';
                 return;
             }
 
