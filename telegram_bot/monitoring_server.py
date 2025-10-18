@@ -61,7 +61,7 @@ def index():
     import os
 
     # Load logo image and convert to base64
-    logo_path = os.path.join(os.path.dirname(__file__), "static", "logo.png")
+    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
     logo_base64 = ""
 
     if os.path.exists(logo_path):

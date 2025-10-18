@@ -8,12 +8,16 @@ __pycache__/
 
 # Data files
 data/*.json
+telegram_bot/data/*.json
+telegram_bot/static/
 !data/.gitkeep
 
 # Logs
 logs/*.log
+logs/sessions/
 !logs/.gitkeep
 bot.log
+telegram_bot/logs/
 
 # IDE
 .vscode/
