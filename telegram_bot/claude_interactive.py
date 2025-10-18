@@ -58,6 +58,8 @@ class ClaudeInteractiveSession:
                 self.model,
                 "--permission-mode",
                 "bypassPermissions",  # Auto-approve file operations
+                "--session-id",
+                task_id,  # Use task_id as session ID for tracking
             ]
 
             # Add agent flag if specified
@@ -104,14 +106,12 @@ class ClaudeInteractiveSession:
         self,
         message: str,
         progress_callback: Callable[[str, int], None] | None = None,
-        heartbeat_interval: int = 30,
     ) -> str | None:
         """Send message to Claude and get response with streaming updates
 
         Args:
             message: The message to send to Claude
             progress_callback: Optional callback for progress updates. Called with (status_message, elapsed_seconds)
-            heartbeat_interval: Unused in this implementation (kept for compatibility)
 
         Note: This closes stdin after sending the message, which causes the claude chat
         process to execute and exit. This is intentional for background task execution.
