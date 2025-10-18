@@ -1,0 +1,28 @@
+{
+  "521930094": {
+    "user_id": 521930094,
+    "total_requests": 1,
+    "total_cost": 0.0010816,
+    "daily_cost": 0.0010816,
+    "monthly_cost": 0.0010816,
+    "weekly_cost": 0.0010816,
+    "records": [
+      {
+        "timestamp": "2025-10-18T15:25:54.579382",
+        "model": "haiku",
+        "input_tokens": 1212,
+        "output_tokens": 28,
+        "cost": 0.0010816,
+        "request_type": "chat"
+      }
+    ],
+    "limits": {
+      "daily": 100.0,
+      "monthly": 1000.0
+    },
+    "last_reset": "2025-10-18T15:25:52.844500",
+    "session_cost": 0.0010816,
+    "session_start": "2025-10-18T15:25:52.844500",
+    "last_warning": null
+  }
+}

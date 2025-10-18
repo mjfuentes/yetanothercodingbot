@@ -1,0 +1,20 @@
+{
+  "521930094": {
+    "user_id": 521930094,
+    "created_at": "2025-10-18T15:25:52.998344",
+    "last_activity": "2025-10-18T15:25:54.578733",
+    "history": [
+      {
+        "role": "user",
+        "content": "hello",
+        "timestamp": "2025-10-18T15:25:54.578024"
+      },
+      {
+        "role": "assistant",
+        "content": "Hey Matias! \ud83d\udc4b What's up? Ready to code, ask questions, or need something done?",
+        "timestamp": "2025-10-18T15:25:54.578733"
+      }
+    ],
+    "current_workspace": null
+  }
+}

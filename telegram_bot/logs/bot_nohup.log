@@ -1,0 +1,4 @@
+  File "main.py", line 97
+    def log_tool_start(task_id: str, tool_name: str, parameters: dict):
+                              ^
+SyntaxError: invalid syntax

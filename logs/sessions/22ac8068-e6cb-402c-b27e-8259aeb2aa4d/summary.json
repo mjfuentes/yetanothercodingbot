@@ -1,0 +1,9 @@
+{
+  "task_id": "22ac8068-e6cb-402c-b27e-8259aeb2aa4d",
+  "total_tools_used": 1,
+  "tools_by_type": {
+    "Bash": 1
+  },
+  "blocked_operations": 0,
+  "tools_with_errors": 0
+}

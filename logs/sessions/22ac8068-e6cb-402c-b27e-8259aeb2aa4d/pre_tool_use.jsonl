@@ -1,0 +1,1 @@
+{"timestamp": "2025-10-18T13:55:01Z", "tool": "Bash", "parameters": {"command": "grep -o '\"name\": \"mcp__[^\"]*\"' <<'EOF' | wc -l\nEOF\n", "description": "Count MCP tools in available functions"}, "status": "starting"}
