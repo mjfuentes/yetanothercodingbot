@@ -105,18 +105,59 @@ def task_tool_usage(task_id):
     """Get tool usage for a specific task from session logs"""
     try:
         import json
+        from collections import defaultdict
 
         # Session logs are stored in logs/sessions/{task_id}/
         session_dir = Path(sessions_dir) / task_id
         summary_file = session_dir / "summary.json"
         pre_tool_file = session_dir / "pre_tool_use.jsonl"
+        post_tool_file = session_dir / "post_tool_use.jsonl"
 
-        if not summary_file.exists():
+        # Check if session directory exists
+        if not session_dir.exists():
             return jsonify({"error": "No session logs found for this task"}), 404
 
-        # Read summary for aggregated stats
-        with open(summary_file) as f:
-            summary = json.load(f)
+        # Read summary if it exists, otherwise generate on-the-fly for running tasks
+        if summary_file.exists():
+            with open(summary_file) as f:
+                summary = json.load(f)
+        else:
+            # Generate summary from JSONL files for running tasks
+            summary = {
+                "task_id": task_id,
+                "total_tools_used": 0,
+                "tools_by_type": {},
+                "blocked_operations": 0,
+                "tools_with_errors": 0,
+            }
+
+            # Count from post_tool_use.jsonl
+            if post_tool_file.exists():
+                tools_by_type = defaultdict(int)
+                tools_with_errors = 0
+                with open(post_tool_file) as f:
+                    for line in f:
+                        if line.strip():
+                            entry = json.loads(line)
+                            tool = entry.get("tool", "unknown")
+                            tools_by_type[tool] += 1
+                            if entry.get("has_error", False):
+                                tools_with_errors += 1
+
+                summary["total_tools_used"] = sum(tools_by_type.values())
+                summary["tools_by_type"] = dict(tools_by_type)
+                summary["tools_with_errors"] = tools_with_errors
+
+            # Count blocked operations from pre_tool_use.jsonl
+            if pre_tool_file.exists():
+                blocked_count = 0
+                with open(pre_tool_file) as f:
+                    for line in f:
+                        if line.strip():
+                            entry = json.loads(line)
+                            if entry.get("status") == "blocked":
+                                blocked_count += 1
+                summary["blocked_operations"] = blocked_count
 
         # Read pre_tool_use for detailed tool calls (including Task tool for worker delegation)
         tool_calls = []
@@ -126,7 +167,7 @@ def task_tool_usage(task_id):
             with open(pre_tool_file) as f:
                 for line in f:
                     if line.strip():
-                        entry = json.load(line)
+                        entry = json.loads(line)
                         tool_calls.append(entry)
 
                         # Track worker spawning (Task tool calls)
@@ -344,6 +385,10 @@ def claude_sessions_metrics():
 def running_tasks():
     """Get list of currently running tasks"""
     try:
+        # Get pagination parameters
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 20))
+
         # Reload tasks from disk to get latest state
         task_manager.reload_tasks()
 
@@ -364,6 +409,7 @@ def running_tasks():
                         "worker_type": task.worker_type,
                         "model": task.model,
                         "created_at": task.created_at,
+                        "updated_at": task.updated_at,
                         "latest_activity": latest_activity,
                     }
                 )
@@ -371,10 +417,150 @@ def running_tasks():
         # Sort by updated_at (most recent first)
         running.sort(key=lambda t: t.get("created_at", ""), reverse=True)
 
-        return jsonify({"tasks": running, "total": len(running)})
+        # Apply pagination
+        total = len(running)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = running[start:end]
+
+        return jsonify({"tasks": paginated, "total": total, "page": page, "page_size": page_size})
 
     except Exception as e:
         logger.error(f"Error getting running tasks: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tasks/completed")
+def completed_tasks():
+    """Get list of completed tasks"""
+    try:
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 20))
+
+        task_manager.reload_tasks()
+
+        completed = []
+        for task in task_manager.tasks.values():
+            if task.status == "completed":
+                latest_activity = None
+                if task.activity_log and len(task.activity_log) > 0:
+                    latest_activity = task.activity_log[-1]["message"]
+
+                completed.append(
+                    {
+                        "task_id": task.task_id,
+                        "description": task.description,
+                        "status": task.status,
+                        "worker_type": task.worker_type,
+                        "model": task.model,
+                        "created_at": task.created_at,
+                        "updated_at": task.updated_at,
+                        "latest_activity": latest_activity,
+                    }
+                )
+
+        # Sort by updated_at (most recent first)
+        completed.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+
+        # Apply pagination
+        total = len(completed)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = completed[start:end]
+
+        return jsonify({"tasks": paginated, "total": total, "page": page, "page_size": page_size})
+
+    except Exception as e:
+        logger.error(f"Error getting completed tasks: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tasks/failed")
+def failed_tasks():
+    """Get list of failed/stopped tasks"""
+    try:
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 20))
+
+        task_manager.reload_tasks()
+
+        failed = []
+        for task in task_manager.tasks.values():
+            if task.status in ["failed", "stopped"]:
+                latest_activity = None
+                if task.activity_log and len(task.activity_log) > 0:
+                    latest_activity = task.activity_log[-1]["message"]
+
+                failed.append(
+                    {
+                        "task_id": task.task_id,
+                        "description": task.description,
+                        "status": task.status,
+                        "worker_type": task.worker_type,
+                        "model": task.model,
+                        "created_at": task.created_at,
+                        "updated_at": task.updated_at,
+                        "latest_activity": latest_activity,
+                    }
+                )
+
+        # Sort by updated_at (most recent first)
+        failed.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+
+        # Apply pagination
+        total = len(failed)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = failed[start:end]
+
+        return jsonify({"tasks": paginated, "total": total, "page": page, "page_size": page_size})
+
+    except Exception as e:
+        logger.error(f"Error getting failed tasks: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tasks/all")
+def all_tasks():
+    """Get list of all tasks"""
+    try:
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 20))
+
+        task_manager.reload_tasks()
+
+        all_tasks_list = []
+        for task in task_manager.tasks.values():
+            latest_activity = None
+            if task.activity_log and len(task.activity_log) > 0:
+                latest_activity = task.activity_log[-1]["message"]
+
+            all_tasks_list.append(
+                {
+                    "task_id": task.task_id,
+                    "description": task.description,
+                    "status": task.status,
+                    "worker_type": task.worker_type,
+                    "model": task.model,
+                    "created_at": task.created_at,
+                    "updated_at": task.updated_at,
+                    "latest_activity": latest_activity,
+                }
+            )
+
+        # Sort by updated_at (most recent first)
+        all_tasks_list.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+
+        # Apply pagination
+        total = len(all_tasks_list)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = all_tasks_list[start:end]
+
+        return jsonify({"tasks": paginated, "total": total, "page": page, "page_size": page_size})
+
+    except Exception as e:
+        logger.error(f"Error getting all tasks: {e}")
         return jsonify({"error": str(e)}), 500
 
 

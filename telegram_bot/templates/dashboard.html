@@ -278,6 +278,74 @@
             background: linear-gradient(135deg, var(--accent-green) 0%, #5c9a6a 100%);
         }
 
+        /* Task Filters */
+        .task-filters {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .filter-btn {
+            padding: 0.5rem 1rem;
+            border: 1.5px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all var(--transition);
+        }
+
+        .filter-btn:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--accent-primary);
+            color: var(--text-primary);
+        }
+
+        .filter-btn.active {
+            background: var(--accent-primary);
+            border-color: var(--accent-primary);
+            color: white;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            padding: 1rem 0;
+            margin-top: 1rem;
+        }
+
+        .pagination-btn {
+            padding: 0.5rem 1rem;
+            border: 1.5px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all var(--transition);
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: var(--bg-tertiary);
+            border-color: var(--accent-primary);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .pagination-info {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
         /* Running Tasks Grid */
         .tasks-grid {
             display: grid;
@@ -718,12 +786,31 @@
         <section id="runningTasksSection">
             <div class="section-header">
                 <div class="section-title">
-                    <span>Running Tasks</span>
+                    <span>Tasks</span>
                     <span class="section-badge" id="runningTasksBadge">0</span>
+                </div>
+                <div class="task-filters">
+                    <button class="filter-btn active" data-filter="active" onclick="setTaskFilter('active')">
+                        Active
+                    </button>
+                    <button class="filter-btn" data-filter="completed" onclick="setTaskFilter('completed')">
+                        Completed
+                    </button>
+                    <button class="filter-btn" data-filter="failed" onclick="setTaskFilter('failed')">
+                        Failed
+                    </button>
+                    <button class="filter-btn" data-filter="all" onclick="setTaskFilter('all')">
+                        All
+                    </button>
                 </div>
             </div>
             <div class="tasks-grid" id="runningTasksGrid">
-                <div class="empty-state">No running tasks</div>
+                <div class="empty-state">No tasks</div>
+            </div>
+            <div class="pagination" id="tasksPagination" style="display: none;">
+                <button class="pagination-btn" onclick="changePage(-1)">← Previous</button>
+                <span class="pagination-info" id="paginationInfo">Page 1 of 1</span>
+                <button class="pagination-btn" onclick="changePage(1)">Next →</button>
             </div>
         </section>
 
@@ -849,10 +936,19 @@
         let reconnectDelay = 2000; // Start with 2 seconds
         let lastUpdateTime = null;
         let connectionStateChangeCallbacks = [];
+        let currentTaskFilter = 'active'; // 'active', 'completed', 'failed', 'all'
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalPages = 1;
+        let preventAutoRefetch = false; // Prevent SSE from refetching tasks
 
         document.addEventListener('DOMContentLoaded', () => {
             // Force dark theme
             document.documentElement.setAttribute('data-theme', 'dark');
+
+            // Initial load of tasks
+            fetchRunningTasks();
+
             startRealtimeUpdates();
             startConnectionMonitor();
         });
@@ -1073,28 +1169,76 @@
         }
 
         function renderRunningTasks(taskStats) {
-            const grid = document.getElementById('runningTasksGrid');
+            // Only update badge from SSE, don't refetch tasks
+            // This prevents filter from being reset on every SSE update
             const badge = document.getElementById('runningTasksBadge');
 
-            const runningCount = taskStats.by_status.running || 0;
-            const pendingCount = taskStats.by_status.pending || 0;
-            const totalActive = runningCount + pendingCount;
+            // Update badge based on current filter
+            if (currentTaskFilter === 'active') {
+                const runningCount = taskStats.by_status.running || 0;
+                const pendingCount = taskStats.by_status.pending || 0;
+                badge.textContent = runningCount + pendingCount;
+            }
+            // For other filters, badge will be updated by fetchRunningTasks
+        }
 
-            badge.textContent = totalActive;
+        function setTaskFilter(filter) {
+            currentTaskFilter = filter;
+            currentPage = 1; // Reset to first page when changing filter
 
-            if (totalActive === 0) {
-                grid.innerHTML = '<div class="empty-state">No running tasks</div>';
+            // Update button states
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === filter);
+            });
+
+            // Re-fetch tasks with new filter
+            fetchRunningTasks();
+        }
+
+        function changePage(delta) {
+            const newPage = currentPage + delta;
+            if (newPage >= 1 && newPage <= totalPages) {
+                currentPage = newPage;
+                fetchRunningTasks();
+            }
+        }
+
+        function updatePagination(total) {
+            totalPages = Math.ceil(total / pageSize);
+
+            const paginationDiv = document.getElementById('tasksPagination');
+            const paginationInfo = document.getElementById('paginationInfo');
+            const buttons = paginationDiv.querySelectorAll('.pagination-btn');
+
+            if (totalPages <= 1) {
+                paginationDiv.style.display = 'none';
                 return;
             }
 
-            // For now, we show a placeholder since we need to modify the API to return actual task details
-            // We'll fetch running tasks separately
-            fetchRunningTasks();
+            paginationDiv.style.display = 'flex';
+            paginationInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+
+            // Update button states
+            buttons[0].disabled = currentPage === 1; // Previous
+            buttons[1].disabled = currentPage === totalPages; // Next
         }
 
         async function fetchRunningTasks() {
             try {
-                const response = await fetch('/api/tasks/running');
+                // Build endpoint URL based on filter
+                let endpoint = '/api/tasks/running';
+                if (currentTaskFilter === 'completed') {
+                    endpoint = '/api/tasks/completed';
+                } else if (currentTaskFilter === 'failed') {
+                    endpoint = '/api/tasks/failed';
+                } else if (currentTaskFilter === 'all') {
+                    endpoint = '/api/tasks/all';
+                }
+
+                // Add pagination parameters
+                endpoint += `?page=${currentPage}&page_size=${pageSize}`;
+
+                const response = await fetch(endpoint);
                 if (!response.ok) {
                     // Fallback: Show count-based cards if endpoint doesn't exist yet
                     showPlaceholderTasks();
@@ -1103,9 +1247,16 @@
 
                 const data = await response.json();
                 const grid = document.getElementById('runningTasksGrid');
+                const badge = document.getElementById('runningTasksBadge');
+
+                const total = data.total || 0;
+                badge.textContent = total;
+
+                // Update pagination
+                updatePagination(total);
 
                 if (!data.tasks || data.tasks.length === 0) {
-                    grid.innerHTML = '<div class="empty-state">No running tasks</div>';
+                    grid.innerHTML = `<div class="empty-state">No ${currentTaskFilter} tasks</div>`;
                     return;
                 }
 
@@ -1124,6 +1275,10 @@
                             <div class="task-meta-item">
                                 <span>🧠</span>
                                 <span>${task.model}</span>
+                            </div>
+                            <div class="task-meta-item">
+                                <span>📅</span>
+                                <span>${formatRelativeTime(task.updated_at)}</span>
                             </div>
                         </div>
                         ${task.latest_activity ? `
@@ -1237,7 +1392,7 @@
         function renderTaskToolUsage(toolData) {
             const container = document.getElementById('taskToolUsage');
 
-            if (!toolData.summary || !toolData.summary.tools_by_type) {
+            if (!toolData.tool_calls || toolData.tool_calls.length === 0) {
                 container.innerHTML = '<div class="no-data">No tool usage data available yet</div>';
                 return;
             }
@@ -1258,23 +1413,48 @@
                 html += '</div>';
             }
 
-            // Show tool usage statistics
-            const toolsArray = Object.entries(toolData.summary.tools_by_type)
-                .map(([tool, count]) => ({ tool, count }))
-                .sort((a, b) => b.count - a.count);
+            // Show chronological list of tool calls (most recent first)
+            html += '<h4 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary);">Tool Usage Timeline</h4>';
 
-            if (toolsArray.length === 0) {
-                html += '<div class="no-data">No tools used yet</div>';
-            } else {
-                html += '<h4 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary);">Tool Usage</h4>';
-                html += toolsArray.map(item => `
-                    <div class="tool-item">
-                        <div>
-                            <div class="tool-name">${escapeHtml(item.tool)}</div>
+            const reversedToolCalls = [...toolData.tool_calls].reverse();
+
+            html += '<div style="max-height: 400px; overflow-y: auto;">';
+            html += reversedToolCalls.slice(0, 50).map(call => {
+                const timestamp = call.timestamp ? new Date(call.timestamp).toLocaleTimeString() : '';
+                const parameters = call.parameters || {};
+                const paramText = Object.keys(parameters).length > 0 ? JSON.stringify(parameters).slice(0, 100) : '';
+
+                return `
+                    <div class="tool-item" style="margin-bottom: 0.5rem; border-left: 3px solid var(--accent-blue); padding-left: 0.75rem;">
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                <div class="tool-name">${escapeHtml(call.tool || 'unknown')}</div>
+                                <div class="tool-stats" style="font-size: 0.75rem;">${timestamp}</div>
+                            </div>
+                            ${paramText ? `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; font-family: monospace;">${escapeHtml(paramText)}</div>` : ''}
                         </div>
-                        <div class="tool-count">${item.count}</div>
                     </div>
-                `).join('');
+                `;
+            }).join('');
+            html += '</div>';
+
+            // Show summary statistics
+            if (toolData.summary && toolData.summary.tools_by_type) {
+                const toolsArray = Object.entries(toolData.summary.tools_by_type)
+                    .map(([tool, count]) => ({ tool, count }))
+                    .sort((a, b) => b.count - a.count);
+
+                if (toolsArray.length > 0) {
+                    html += '<h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary);">Summary</h4>';
+                    html += toolsArray.map(item => `
+                        <div class="tool-item">
+                            <div>
+                                <div class="tool-name">${escapeHtml(item.tool)}</div>
+                            </div>
+                            <div class="tool-count">${item.count}</div>
+                        </div>
+                    `).join('');
+                }
             }
 
             container.innerHTML = html;
