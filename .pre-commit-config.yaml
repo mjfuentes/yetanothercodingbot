@@ -99,7 +99,7 @@ repos:
         entry: bash -c 'changed_files=$(git diff --name-only --cached | grep "^telegram_bot/.*\.py$" | grep -v "test_" || true); if [ -n "$changed_files" ]; then echo "Modified files"; echo "$changed_files"; test_count=$(find telegram_bot -name "test_*.py" -o -name "*_test.py" 2>/dev/null | wc -l); if [ "$test_count" -eq 0 ]; then echo "ERROR No test files found. Please add tests."; exit 1; fi; fi'
         language: system
         pass_filenames: false
-        stages: [pre-commit]
+        stages: [commit]
 
       # Test frontend_worker agent configuration
       - id: test-frontend-worker
@@ -116,5 +116,5 @@ repos:
         entry: bash -c 'echo "✓ Pre-commit hooks passed"; echo "Remember - All code changes must be tested and committed"; echo "Workflow - Format → Lint → Test → Commit"'
         language: system
         pass_filenames: false
-        stages: [pre-commit]
+        stages: [commit]
         always_run: true

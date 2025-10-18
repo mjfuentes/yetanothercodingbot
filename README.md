@@ -1,5 +1,9 @@
 # YetAnotherCodingBot
 
+<p align="center">
+  <img src="telegram_bot/logo.png" alt="Bot Logo" width="200"/>
+</p>
+
 A Telegram bot powered by Claude AI that handles everything from quick questions to complex coding tasks. Routes intelligently between Claude API for speed and Claude Code CLI for deep work.
 
 ## What it does
