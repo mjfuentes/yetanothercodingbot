@@ -1,0 +1,19 @@
+2025-10-18 14:12:16,707 - __main__ - INFO - Starting monitoring server on 0.0.0.0:3000
+ * Serving Flask app 'monitoring_server'
+ * Debug mode: off
+2025-10-18 14:12:16,712 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:3000
+ * Running on http://192.168.2.153:3000
+2025-10-18 14:12:16,712 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-18 14:12:19,625 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:12:19] "GET /api/stream/metrics?hours=24 HTTP/1.1" 200 -
+2025-10-18 14:12:19,626 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:12:19] "GET /api/stream/metrics?hours=24 HTTP/1.1" 200 -
+2025-10-18 14:12:49,819 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:12:49] "GET / HTTP/1.1" 200 -
+2025-10-18 14:12:49,947 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:12:49] "GET /api/stream/metrics?hours=24 HTTP/1.1" 200 -
+2025-10-18 14:16:04,152 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:16:04] "GET / HTTP/1.1" 200 -
+2025-10-18 14:16:04,284 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:16:04] "GET /api/stream/metrics?hours=24 HTTP/1.1" 200 -
+2025-10-18 14:17:10,091 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:17:10] "GET / HTTP/1.1" 200 -
+2025-10-18 14:17:10,138 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:17:10] "GET /api/stream/metrics?hours=24 HTTP/1.1" 200 -
+2025-10-18 14:17:29,327 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:17:29] "GET /api/stream/metrics?hours=1 HTTP/1.1" 200 -
+2025-10-18 14:17:31,031 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:17:31] "GET /api/metrics/claude-sessions?hours=1 HTTP/1.1" 200 -
+2025-10-18 14:17:39,046 - werkzeug - INFO - 127.0.0.1 - - [18/Oct/2025 14:17:39] "GET / HTTP/1.1" 200 -

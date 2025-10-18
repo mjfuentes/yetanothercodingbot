@@ -1,0 +1,12 @@
+{
+  "task_id": "3646b7ba-6904-421b-b099-ee15cc07f164",
+  "total_tools_used": 32,
+  "tools_by_type": {
+    "Bash": 27,
+    "Read": 2,
+    "Glob": 1,
+    "Edit": 2
+  },
+  "blocked_operations": 0,
+  "tools_with_errors": 0
+}

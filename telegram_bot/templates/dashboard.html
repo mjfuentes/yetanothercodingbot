@@ -75,6 +75,10 @@
             font-weight: 500;
             cursor: pointer;
             transition: background var(--transition), border-color var(--transition);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
         .btn:hover {
@@ -86,22 +90,6 @@
             background: var(--accent-blue);
             border-color: var(--accent-blue);
             color: white;
-        }
-
-        .refresh-indicator {
-            position: fixed;
-            top: 1.25rem;
-            right: 1.25rem;
-            background: var(--bg-secondary);
-            padding: 0.625rem 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-            display: none;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.875rem;
-            color: var(--text-secondary);
-            box-shadow: 0 4px 12px var(--shadow);
         }
 
         .auto-refresh-status {
@@ -117,10 +105,54 @@
             gap: 0.75rem;
             font-size: 0.875rem;
             box-shadow: 0 4px 12px var(--shadow);
+            z-index: 100;
+            transition: border-color var(--transition), box-shadow var(--transition);
         }
 
-        .auto-refresh-status.updating {
-            display: none;
+        .auto-refresh-status.updating .status-text {
+            color: var(--accent-blue);
+        }
+
+        .auto-refresh-status.connected {
+            border-color: var(--accent-green);
+        }
+
+        .auto-refresh-status.reconnecting {
+            border-color: var(--accent-yellow);
+        }
+
+        .auto-refresh-status.failed {
+            border-color: var(--accent-red);
+        }
+
+        .auto-refresh-status.disconnected {
+            border-color: var(--text-muted);
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: background var(--transition);
+        }
+
+        .auto-refresh-status.connected .status-indicator {
+            background: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+        }
+
+        .auto-refresh-status.reconnecting .status-indicator {
+            background: var(--accent-yellow);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .auto-refresh-status.failed .status-indicator {
+            background: var(--accent-red);
+        }
+
+        .auto-refresh-status.disconnected .status-indicator {
+            background: var(--text-muted);
         }
 
         .refresh-toggle {
@@ -135,7 +167,7 @@
             cursor: pointer;
         }
 
-        .refresh-countdown {
+        .status-text {
             color: var(--text-muted);
             font-variant-numeric: tabular-nums;
         }
@@ -147,151 +179,348 @@
             border-top-color: var(--accent-blue);
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
+            display: none;
+        }
+
+        .updating .spinner {
+            display: block;
         }
 
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1rem;
-            margin-bottom: 1rem;
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.5;
+                transform: scale(1.2);
+            }
         }
 
-        .card {
+        /* Section Headers */
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .section-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .section-badge {
+            background: var(--accent-blue);
+            color: white;
+            padding: 0.125rem 0.5rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .section-badge.error {
+            background: var(--accent-red);
+        }
+
+        .section-badge.success {
+            background: var(--accent-green);
+        }
+
+        /* Running Tasks Grid */
+        .tasks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .task-card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 0.5rem;
-            padding: 1.25rem;
+            padding: 1rem;
+            cursor: pointer;
+            transition: all var(--transition);
+            position: relative;
         }
 
-        .card-header {
-            display: flex;
-            align-items: center;
-            gap: 0.625rem;
-            margin-bottom: 1rem;
+        .task-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px var(--shadow);
         }
 
-        .card-icon {
-            width: 2rem;
-            height: 2rem;
-            border-radius: 0.375rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1rem;
-            flex-shrink: 0;
+        .task-card.in_progress {
+            border-left: 3px solid var(--accent-blue);
         }
 
-        .icon-api { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
-        .icon-tasks { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
-        .icon-tools { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
-        .icon-health { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
-
-        .card-title {
-            font-size: 1rem;
-            font-weight: 600;
+        .task-card.pending {
+            border-left: 3px solid var(--accent-yellow);
         }
 
-        .metrics {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-        }
-
-        .metric {
+        .task-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: flex-start;
+            margin-bottom: 0.75rem;
         }
 
-        .metric-label {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
+        .task-id {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: 'Monaco', 'Courier New', monospace;
         }
 
-        .metric-value {
-            font-size: 1.125rem;
+        .task-status {
+            padding: 0.25rem 0.625rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
             font-weight: 600;
         }
 
-        .value-cost { color: var(--accent-blue); }
-        .value-success { color: var(--accent-green); }
-        .value-error { color: var(--accent-red); }
-
-        .model-breakdown {
-            display: flex;
-            flex-direction: column;
-            gap: 0.625rem;
-            margin-top: 1rem;
-            padding-top: 1rem;
-            border-top: 1px solid var(--border-color);
-        }
-
-        .model-item {
-            padding: 0.75rem;
-            background: var(--bg-tertiary);
-            border-radius: 0.375rem;
-        }
-
-        .model-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 0.5rem;
-        }
-
-        .model-name {
-            font-weight: 600;
-            font-size: 0.875rem;
-        }
-
-        .model-cost {
+        .task-status.in_progress {
+            background: rgba(59, 130, 246, 0.15);
             color: var(--accent-blue);
-            font-weight: 600;
         }
 
-        .model-details {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 0.5rem;
+        .task-status.pending {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-yellow);
+        }
+
+        .task-description {
+            font-size: 0.9375rem;
+            font-weight: 500;
+            margin-bottom: 0.75rem;
+            line-height: 1.4;
+        }
+
+        .task-meta {
+            display: flex;
+            gap: 1rem;
             font-size: 0.75rem;
             color: var(--text-muted);
         }
 
-        .tool-list {
-            max-height: 280px;
-            overflow-y: auto;
-            scrollbar-width: thin;
-            scrollbar-color: var(--border-color) transparent;
+        .task-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
         }
 
-        .tool-list::-webkit-scrollbar {
-            width: 6px;
+        .task-activity {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
         }
 
-        .tool-list::-webkit-scrollbar-track {
+        .empty-state {
+            background: var(--bg-secondary);
+            border: 1px dashed var(--border-color);
+            border-radius: 0.5rem;
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        /* Clickable Metric Cards */
+        .metrics-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+
+        .metric-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
+        }
+
+        .metric-card.error-card:hover {
+            border-color: var(--accent-red);
+        }
+
+        .metric-label {
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .metric-value.error {
+            color: var(--accent-red);
+        }
+
+        .metric-value.success {
+            color: var(--accent-green);
+        }
+
+        .metric-value.cost {
+            color: var(--accent-blue);
+        }
+
+        .metric-sublabel {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tab {
             background: transparent;
+            color: var(--text-secondary);
+            border: none;
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--transition);
+            border-bottom: 2px solid transparent;
         }
 
-        .tool-list::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 1000;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            max-width: 800px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            z-index: 10;
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .modal-subtitle {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.25rem;
+            transition: all var(--transition);
+        }
+
+        .modal-close:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        /* Tool Usage List */
+        .tool-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
         }
 
         .tool-item {
+            background: var(--bg-tertiary);
+            border-radius: 0.375rem;
+            padding: 0.75rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 0.625rem;
-            margin-bottom: 0.5rem;
-            background: var(--bg-tertiary);
-            border-radius: 0.375rem;
-        }
-
-        .tool-item:last-child {
-            margin-bottom: 0;
         }
 
         .tool-name {
@@ -305,100 +534,85 @@
             font-size: 0.75rem;
         }
 
+        .tool-count {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }
+
+        /* Error List */
         .error-list {
-            max-height: 240px;
-            overflow-y: auto;
-            scrollbar-width: thin;
-            scrollbar-color: var(--border-color) transparent;
-        }
-
-        .error-list::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .error-list::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .error-list::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
         }
 
         .error-item {
-            padding: 0.75rem;
-            margin-bottom: 0.5rem;
+            padding: 1rem;
             background: rgba(239, 68, 68, 0.1);
             border-left: 3px solid var(--accent-red);
             border-radius: 0.25rem;
         }
 
-        .error-item:last-child {
-            margin-bottom: 0;
+        .error-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.5rem;
+        }
+
+        .error-task-id {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: 'Monaco', 'Courier New', monospace;
         }
 
         .error-time {
             font-size: 0.75rem;
             color: var(--text-muted);
-            margin-bottom: 0.25rem;
         }
 
         .error-message {
             font-size: 0.875rem;
+            color: var(--text-primary);
         }
 
         .no-errors {
             color: var(--accent-green);
             text-align: center;
-            padding: 1.5rem;
+            padding: 2rem;
             font-weight: 500;
         }
 
         .no-data {
             color: var(--text-muted);
             text-align: center;
-            padding: 1.5rem;
+            padding: 2rem;
         }
 
-        .activity-feed-item {
-            padding: 0.75rem;
-            margin-bottom: 0.5rem;
-            background: var(--bg-tertiary);
-            border-radius: 0.375rem;
-            border-left: 3px solid var(--accent-blue);
+        /* Compact stats table */
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
         }
 
-        .activity-feed-item:last-child {
-            margin-bottom: 0;
-        }
-
-        .activity-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.25rem;
-        }
-
-        .activity-task {
-            font-weight: 600;
+        .stats-table td {
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
             font-size: 0.875rem;
-            color: var(--accent-blue);
         }
 
-        .activity-time {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-        }
-
-        .activity-message {
-            font-size: 0.875rem;
+        .stats-table td:first-child {
             color: var(--text-secondary);
         }
 
-        .loading {
-            text-align: center;
-            padding: 2rem;
-            color: var(--text-muted);
+        .stats-table td:last-child {
+            text-align: right;
+            font-weight: 600;
+        }
+
+        .stats-table tr:last-child td {
+            border-bottom: none;
         }
 
         @media (max-width: 768px) {
@@ -410,8 +624,16 @@
                 font-size: 1.5rem;
             }
 
-            .grid {
+            .tasks-grid {
                 grid-template-columns: 1fr;
+            }
+
+            .metrics-row {
+                grid-template-columns: 1fr;
+            }
+
+            .modal {
+                padding: 1rem;
             }
         }
     </style>
@@ -420,33 +642,146 @@
     <div class="container">
         <header>
             <h1>Bot Monitoring Dashboard</h1>
-            <p class="subtitle">Real-time metrics for Claude API usage, tasks, and tool execution</p>
+            <p class="subtitle">Real-time task monitoring and system health</p>
         </header>
 
         <div class="controls">
             <button class="btn active" onclick="setTimeRange(24)">24 Hours</button>
             <button class="btn" onclick="setTimeRange(168)">7 Days</button>
             <button class="btn" onclick="setTimeRange(720)">30 Days</button>
-            <button class="btn" onclick="refreshData()">Refresh Now</button>
-            <a href="/telegram" target="_blank" class="btn" style="margin-left: auto;">💬 Open Telegram</a>
-        </div>
-
-        <div class="refresh-indicator" id="refreshIndicator">
-            <div class="spinner"></div>
-            <span>Updating...</span>
+            <button class="btn" onclick="manualRefresh()" title="Refresh now">🔄 Refresh</button>
         </div>
 
         <div class="auto-refresh-status" id="autoRefreshStatus">
+            <div class="status-indicator"></div>
+            <div class="spinner"></div>
             <label class="refresh-toggle">
                 <input type="checkbox" id="autoRefreshToggle" checked onchange="toggleAutoRefresh()">
                 <span>Auto-refresh</span>
             </label>
-            <span class="refresh-countdown" id="refreshCountdown">30s</span>
+            <span class="status-text" id="statusText">Connecting...</span>
         </div>
 
-        <div class="grid" id="metricsGrid">
-            <div class="card">
-                <div class="loading">Loading metrics...</div>
+        <!-- RUNNING TASKS SECTION -->
+        <section id="runningTasksSection">
+            <div class="section-header">
+                <div class="section-title">
+                    <span>Running Tasks</span>
+                    <span class="section-badge" id="runningTasksBadge">0</span>
+                </div>
+            </div>
+            <div class="tasks-grid" id="runningTasksGrid">
+                <div class="empty-state">No running tasks</div>
+            </div>
+        </section>
+
+        <!-- METRICS ROW -->
+        <div class="metrics-row">
+            <div class="metric-card error-card" onclick="showErrorsModal()">
+                <div class="metric-label">Errors (24h)</div>
+                <div class="metric-value error" id="errorCount">0</div>
+                <div class="metric-sublabel">Click to view all</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Total Tasks</div>
+                <div class="metric-value" id="totalTasks">0</div>
+                <div class="metric-sublabel" id="successRate">0% success</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">API Cost (24h)</div>
+                <div class="metric-value cost" id="apiCost">$0.00</div>
+                <div class="metric-sublabel" id="apiRequests">0 requests</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Tool Calls</div>
+                <div class="metric-value" id="toolCalls">0</div>
+                <div class="metric-sublabel" id="codeSessions">0 sessions</div>
+            </div>
+        </div>
+
+        <!-- TABS FOR ADDITIONAL INFO -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('overview')">Overview</button>
+            <button class="tab" onclick="switchTab('activity')">Recent Activity</button>
+            <button class="tab" onclick="switchTab('tools')">Tools</button>
+        </div>
+
+        <div id="overviewTab" class="tab-content active">
+            <table class="stats-table">
+                <tr>
+                    <td>Completed Tasks</td>
+                    <td id="completedTasks">0</td>
+                </tr>
+                <tr>
+                    <td>Failed Tasks</td>
+                    <td id="failedTasks">0</td>
+                </tr>
+                <tr>
+                    <td>Pending Tasks</td>
+                    <td id="pendingTasks">0</td>
+                </tr>
+                <tr>
+                    <td>Total API Requests</td>
+                    <td id="totalApiRequests">0</td>
+                </tr>
+                <tr>
+                    <td>Total API Cost</td>
+                    <td id="totalApiCost">$0.00</td>
+                </tr>
+                <tr>
+                    <td>Code Sessions (24h)</td>
+                    <td id="totalSessions">0</td>
+                </tr>
+            </table>
+        </div>
+
+        <div id="activityTab" class="tab-content">
+            <div id="activityFeed"></div>
+        </div>
+
+        <div id="toolsTab" class="tab-content">
+            <div class="tool-list" id="toolsList"></div>
+        </div>
+    </div>
+
+    <!-- TASK DETAIL MODAL -->
+    <div class="modal" id="taskModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title" id="modalTaskTitle">Task Details</div>
+                    <div class="modal-subtitle" id="modalTaskSubtitle"></div>
+                </div>
+                <button class="modal-close" onclick="closeTaskModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3 style="margin-bottom: 1rem; font-size: 1rem;">Real-time Tool Usage</h3>
+                <div id="taskToolUsage" class="tool-list">
+                    <div class="no-data">Loading tool usage...</div>
+                </div>
+
+                <h3 style="margin-top: 2rem; margin-bottom: 1rem; font-size: 1rem;">Activity Log</h3>
+                <div id="taskActivityLog">
+                    <div class="no-data">No activity yet</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ERRORS MODAL -->
+    <div class="modal" id="errorsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title">Error Log</div>
+                    <div class="modal-subtitle">Recent errors from all tasks</div>
+                </div>
+                <button class="modal-close" onclick="closeErrorsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="errorsList" class="error-list">
+                    <div class="no-data">Loading errors...</div>
+                </div>
             </div>
         </div>
     </div>
@@ -455,20 +790,26 @@
         let currentTimeRange = 24;
         let eventSource = null;
         let autoRefreshEnabled = true;
+        let currentData = null;
+        let currentTaskId = null;
+        let reconnectAttempts = 0;
+        let maxReconnectAttempts = 10;
+        let reconnectDelay = 2000; // Start with 2 seconds
         let lastUpdateTime = null;
-        let connectionRetryCount = 0;
-        const MAX_RETRY_COUNT = 5;
+        let connectionStateChangeCallbacks = [];
 
         document.addEventListener('DOMContentLoaded', () => {
             startRealtimeUpdates();
+            startConnectionMonitor();
         });
 
         function setTimeRange(hours) {
             currentTimeRange = hours;
-            document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.controls .btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
             event.target.classList.add('active');
 
-            // Restart SSE connection with new time range
             stopRealtimeUpdates();
             startRealtimeUpdates();
         }
@@ -476,58 +817,100 @@
         function startRealtimeUpdates() {
             if (!autoRefreshEnabled) return;
 
-            // Close existing connection if any
             if (eventSource) {
                 eventSource.close();
             }
 
-            showRefreshIndicator();
+            updateStatus('Connecting...', true);
 
-            // Create new EventSource connection
-            eventSource = new EventSource(`/api/stream/metrics?hours=${currentTimeRange}`);
+            try {
+                eventSource = new EventSource(`/api/stream/metrics?hours=${currentTimeRange}`);
 
-            eventSource.onopen = () => {
-                console.log('SSE connection established');
-                connectionRetryCount = 0;
-                updateConnectionStatus('Connected');
-            };
+                eventSource.onopen = () => {
+                    console.log('SSE connection established');
+                    reconnectAttempts = 0;
+                    reconnectDelay = 2000;
+                    updateStatus('Live', false);
+                    notifyConnectionStateChange('connected');
+                };
 
-            eventSource.onmessage = (event) => {
+                eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        currentData = data;
+                        lastUpdateTime = Date.now();
+                        renderDashboard(data);
+                        updateStatus('Live', false);
+                    } catch (error) {
+                        console.error('Error parsing SSE data:', error);
+                        updateStatus('Error parsing data', false);
+                    }
+                };
+
+                eventSource.onerror = (error) => {
+                    console.error('SSE connection error:', error);
+
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        handleReconnection();
+                    }
+                };
+            } catch (error) {
+                console.error('Failed to create EventSource:', error);
+                handleReconnection();
+            }
+        }
+
+        function handleReconnection() {
+            if (!autoRefreshEnabled) return;
+
+            reconnectAttempts++;
+
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                updateStatus(`Connection failed (${reconnectAttempts} attempts)`, false);
+                notifyConnectionStateChange('failed');
+                return;
+            }
+
+            // Exponential backoff with jitter
+            const jitter = Math.random() * 1000;
+            const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1) + jitter, 30000);
+
+            updateStatus(`Reconnecting... (attempt ${reconnectAttempts}/${maxReconnectAttempts})`, true);
+            notifyConnectionStateChange('reconnecting');
+
+            setTimeout(() => {
+                startRealtimeUpdates();
+            }, delay);
+        }
+
+        function startConnectionMonitor() {
+            // Monitor connection health by checking last update time
+            setInterval(() => {
+                if (!autoRefreshEnabled || !lastUpdateTime) return;
+
+                const timeSinceLastUpdate = Date.now() - lastUpdateTime;
+                const maxSilenceTime = 15000; // 15 seconds without updates
+
+                if (timeSinceLastUpdate > maxSilenceTime && eventSource?.readyState === EventSource.OPEN) {
+                    console.warn('Connection appears stale, reconnecting...');
+                    stopRealtimeUpdates();
+                    startRealtimeUpdates();
+                }
+            }, 5000);
+        }
+
+        function notifyConnectionStateChange(state) {
+            connectionStateChangeCallbacks.forEach(callback => {
                 try {
-                    const data = JSON.parse(event.data);
-
-                    // Update metrics with real-time data
-                    renderMetrics(data.overview, data.sessions, {activity: data.activity});
-
-                    // Update timestamp
-                    lastUpdateTime = new Date();
-                    updateConnectionStatus('Live');
-                    hideRefreshIndicator();
-
+                    callback(state);
                 } catch (error) {
-                    console.error('Error parsing SSE data:', error);
+                    console.error('Error in connection state callback:', error);
                 }
-            };
+            });
+        }
 
-            eventSource.onerror = (error) => {
-                console.error('SSE connection error:', error);
-                hideRefreshIndicator();
-
-                connectionRetryCount++;
-
-                if (connectionRetryCount >= MAX_RETRY_COUNT) {
-                    updateConnectionStatus('Connection failed - retrying...');
-                    eventSource.close();
-
-                    // Retry after 5 seconds
-                    setTimeout(() => {
-                        connectionRetryCount = 0;
-                        startRealtimeUpdates();
-                    }, 5000);
-                } else {
-                    updateConnectionStatus('Reconnecting...');
-                }
-            };
+        function onConnectionStateChange(callback) {
+            connectionStateChangeCallbacks.push(callback);
         }
 
         function stopRealtimeUpdates() {
@@ -535,298 +918,391 @@
                 eventSource.close();
                 eventSource = null;
             }
-            updateConnectionStatus('Disconnected');
-        }
-
-        function renderMetrics(data, claudeSessionsData, activityData) {
-            const grid = document.getElementById('metricsGrid');
-
-            grid.innerHTML = `
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-icon icon-api">API</div>
-                        <h2 class="card-title">Claude Usage</h2>
-                    </div>
-                    <div class="metrics">
-                        <div class="metric">
-                            <span class="metric-label">Total Cost</span>
-                            <span class="metric-value value-cost">$${data.claude_api_usage.total_cost.toFixed(2)}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">API Requests</span>
-                            <span class="metric-value">${data.claude_api_usage.total_requests.toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Code Sessions</span>
-                            <span class="metric-value">${claudeSessionsData.total_sessions.toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Tool Calls</span>
-                            <span class="metric-value">${claudeSessionsData.total_tool_calls.toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Recent (${currentTimeRange}h)</span>
-                            <span class="metric-value">${data.claude_api_usage.recent_requests.toLocaleString()} requests</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Recent Cost</span>
-                            <span class="metric-value value-cost">$${data.claude_api_usage.recent_cost.toFixed(2)}</span>
-                        </div>
-                    </div>
-                    <div class="model-breakdown">
-                        ${renderModelBreakdown(data.claude_api_usage.model_breakdown)}
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-icon icon-tasks">TK</div>
-                        <h2 class="card-title">Task Execution</h2>
-                    </div>
-                    <div class="metrics">
-                        <div class="metric">
-                            <span class="metric-label">Total Tasks</span>
-                            <span class="metric-value">${data.task_statistics.total_tasks.toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Success Rate</span>
-                            <span class="metric-value value-success">${data.task_statistics.success_rate.toFixed(1)}%</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Completed</span>
-                            <span class="metric-value value-success">${data.task_statistics.by_status.completed}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Failed</span>
-                            <span class="metric-value value-error">${data.task_statistics.by_status.failed}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">In Progress</span>
-                            <span class="metric-value">${data.task_statistics.by_status.in_progress}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-icon icon-tools">TL</div>
-                        <h2 class="card-title">Tool Usage</h2>
-                    </div>
-                    <div class="metrics">
-                        <div class="metric">
-                            <span class="metric-label">Total Tool Calls</span>
-                            <span class="metric-value">${data.tool_usage.total_tool_calls.toLocaleString()}</span>
-                        </div>
-                    </div>
-                    <div class="tool-list">
-                        ${renderTopTools(data.tool_usage.most_used_tools)}
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-icon icon-health">SH</div>
-                        <h2 class="card-title">System Health</h2>
-                    </div>
-                    <div class="metrics">
-                        <div class="metric">
-                            <span class="metric-label">Active Tasks</span>
-                            <span class="metric-value">${data.system_health.active_tasks_count}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Errors (24h)</span>
-                            <span class="metric-value value-error">${data.system_health.recent_errors_24h}</span>
-                        </div>
-                    </div>
-                    <div class="error-list">
-                        ${renderRecentErrors(data.system_health.recent_errors)}
-                    </div>
-                </div>
-
-                <div class="card" style="grid-column: 1 / -1;">
-                    <div class="card-header">
-                        <div class="card-icon icon-tasks">🔄</div>
-                        <h2 class="card-title">Live Activity Feed</h2>
-                    </div>
-                    <div class="error-list" style="max-height: 400px;">
-                        ${renderActivityFeed(activityData)}
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderSessionsBreakdown(sessions) {
-            if (!sessions || sessions.length === 0) {
-                return '<div class="no-data" style="margin-top: 1rem;">No sessions yet</div>';
-            }
-
-            return `
-                <div class="model-breakdown">
-                    ${sessions.slice(0, 5).map(session => `
-                        <div class="model-item">
-                            <div class="model-header">
-                                <span class="model-name">${session.session_id.substring(0, 8)}...</span>
-                                <span class="model-cost">${session.total_tools} tools</span>
-                            </div>
-                            <div class="model-details">
-                                <div>${session.blocked} blocked</div>
-                                <div>${session.errors} errors</div>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        }
-
-        function renderModelBreakdown(models) {
-            if (!models || Object.keys(models).length === 0) {
-                return '<div class="no-data">No data available</div>';
-            }
-
-            return Object.entries(models).map(([model, stats]) => `
-                <div class="model-item">
-                    <div class="model-header">
-                        <span class="model-name">${model}</span>
-                        <span class="model-cost">$${stats.cost.toFixed(2)}</span>
-                    </div>
-                    <div class="model-details">
-                        <div>${stats.requests} requests</div>
-                        <div>${(stats.input_tokens / 1000).toFixed(1)}K in</div>
-                        <div>${(stats.output_tokens / 1000).toFixed(1)}K out</div>
-                        <div>${((stats.input_tokens + stats.output_tokens) / 1000).toFixed(1)}K total</div>
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        function renderTopTools(tools) {
-            if (!tools || tools.length === 0) {
-                return '<div class="no-data">No tool usage data</div>';
-            }
-
-            return tools.slice(0, 5).map(tool => `
-                <div class="tool-item">
-                    <div>
-                        <div class="tool-name">${tool.tool}</div>
-                        <div class="tool-stats">
-                            ${tool.count} calls • ${(tool.success_rate * 100).toFixed(0)}% success
-                        </div>
-                    </div>
-                    <div class="tool-stats">
-                        ${tool.avg_duration_ms.toFixed(0)}ms
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        function renderRecentErrors(errors) {
-            if (!errors || errors.length === 0) {
-                return '<div class="no-errors">No recent errors</div>';
-            }
-
-            return errors.slice(0, 3).map(error => `
-                <div class="error-item">
-                    <div class="error-time">${new Date(error.timestamp).toLocaleString()} • Task #${error.task_id}</div>
-                    <div class="error-message">${error.error}</div>
-                </div>
-            `).join('');
-        }
-
-        function renderActivityFeed(activityData) {
-            if (!activityData || !activityData.activity || activityData.activity.length === 0) {
-                return '<div class="no-data">No activity yet</div>';
-            }
-
-            function getStatusIcon(status) {
-                const icons = {
-                    'in_progress': '▶️',
-                    'completed': '✅',
-                    'failed': '❌',
-                    'pending': '🔄',
-                    'stopped': '⏸️'
-                };
-                return icons[status] || '•';
-            }
-
-            function getRelativeTime(timestamp) {
-                const now = new Date();
-                const then = new Date(timestamp);
-                const diffMs = now - then;
-                const diffSecs = Math.floor(diffMs / 1000);
-                const diffMins = Math.floor(diffSecs / 60);
-                const diffHours = Math.floor(diffMins / 60);
-                const diffDays = Math.floor(diffHours / 24);
-
-                if (diffSecs < 60) return `${diffSecs}s ago`;
-                if (diffMins < 60) return `${diffMins}m ago`;
-                if (diffHours < 24) return `${diffHours}h ago`;
-                return `${diffDays}d ago`;
-            }
-
-            return activityData.activity.map(activity => `
-                <div class="tool-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
-                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: flex-start;">
-                        <div style="flex: 1;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-                                <span style="font-size: 0.875rem;">${getStatusIcon(activity.status)}</span>
-                                <span class="tool-name" style="font-size: 0.875rem;">Task #${activity.task_id}</span>
-                                <span class="tool-stats">${activity.description}</span>
-                            </div>
-                            <div class="tool-stats" style="margin-left: 1.75rem;">${activity.message}</div>
-                        </div>
-                        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem;">
-                            <span class="tool-stats" style="white-space: nowrap;">${getRelativeTime(activity.timestamp)}</span>
-                            ${activity.output_lines ? `<span class="tool-stats" style="color: var(--accent-green);">${activity.output_lines} lines</span>` : ''}
-                        </div>
-                    </div>
-                </div>
-            `).join('');
+            reconnectAttempts = 0;
+            updateStatus('Disconnected', false);
+            notifyConnectionStateChange('disconnected');
         }
 
         function toggleAutoRefresh() {
             autoRefreshEnabled = document.getElementById('autoRefreshToggle').checked;
 
             if (autoRefreshEnabled) {
+                reconnectAttempts = 0;
                 startRealtimeUpdates();
             } else {
                 stopRealtimeUpdates();
             }
         }
 
-        function refreshData() {
-            // Manually restart the connection to force an update
-            stopRealtimeUpdates();
-            startRealtimeUpdates();
-        }
-
-        function updateConnectionStatus(status) {
-            const countdownEl = document.getElementById('refreshCountdown');
-            if (countdownEl) {
-                countdownEl.textContent = status;
+        function manualRefresh() {
+            if (!autoRefreshEnabled) {
+                // If auto-refresh is disabled, do a one-time fetch
+                fetch(`/api/metrics/overview?hours=${currentTimeRange}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        currentData = data;
+                        renderDashboard(data);
+                        updateStatus('Updated', false);
+                    })
+                    .catch(error => {
+                        console.error('Error fetching metrics:', error);
+                        updateStatus('Error', false);
+                    });
+            } else {
+                // Force reconnect if auto-refresh is enabled
+                stopRealtimeUpdates();
+                setTimeout(() => startRealtimeUpdates(), 100);
             }
         }
 
-        function showRefreshIndicator() {
-            document.getElementById('refreshIndicator').style.display = 'flex';
-            document.getElementById('autoRefreshStatus').classList.add('updating');
+        function updateStatus(text, isUpdating, connectionState = null) {
+            const statusEl = document.getElementById('statusText');
+            const containerEl = document.getElementById('autoRefreshStatus');
+
+            if (statusEl) {
+                statusEl.textContent = text;
+            }
+
+            if (containerEl) {
+                if (isUpdating) {
+                    containerEl.classList.add('updating');
+                } else {
+                    containerEl.classList.remove('updating');
+                }
+
+                // Update connection state classes
+                if (connectionState) {
+                    containerEl.classList.remove('connected', 'reconnecting', 'failed', 'disconnected');
+                    containerEl.classList.add(connectionState);
+                }
+            }
         }
 
-        function hideRefreshIndicator() {
-            document.getElementById('refreshIndicator').style.display = 'none';
-            document.getElementById('autoRefreshStatus').classList.remove('updating');
+        // Update status based on connection state changes
+        onConnectionStateChange((state) => {
+            const statusEl = document.getElementById('autoRefreshStatus');
+            if (statusEl) {
+                statusEl.classList.remove('connected', 'reconnecting', 'failed', 'disconnected');
+                statusEl.classList.add(state);
+            }
+        });
+
+        function renderDashboard(data) {
+            const overview = data.overview;
+            const sessions = data.sessions;
+
+            // Running Tasks
+            renderRunningTasks(overview.task_statistics);
+
+            // Metrics
+            document.getElementById('errorCount').textContent = overview.system_health.recent_errors_24h;
+            document.getElementById('totalTasks').textContent = overview.task_statistics.total_tasks.toLocaleString();
+            document.getElementById('successRate').textContent = `${overview.task_statistics.success_rate.toFixed(1)}% success`;
+            document.getElementById('apiCost').textContent = `$${overview.claude_api_usage.recent_cost.toFixed(2)}`;
+            document.getElementById('apiRequests').textContent = `${overview.claude_api_usage.recent_requests.toLocaleString()} requests`;
+            document.getElementById('toolCalls').textContent = sessions.total_tool_calls.toLocaleString();
+            document.getElementById('codeSessions').textContent = `${sessions.total_sessions} sessions`;
+
+            // Overview tab
+            document.getElementById('completedTasks').textContent = overview.task_statistics.by_status.completed;
+            document.getElementById('failedTasks').textContent = overview.task_statistics.by_status.failed;
+            document.getElementById('pendingTasks').textContent = overview.task_statistics.by_status.pending;
+            document.getElementById('totalApiRequests').textContent = overview.claude_api_usage.total_requests.toLocaleString();
+            document.getElementById('totalApiCost').textContent = `$${overview.claude_api_usage.total_cost.toFixed(2)}`;
+            document.getElementById('totalSessions').textContent = sessions.total_sessions;
+
+            // Activity tab
+            renderActivityFeed(data.activity);
+
+            // Tools tab
+            renderToolsList(overview.tool_usage.most_used_tools);
         }
 
-        function showError(message) {
-            const grid = document.getElementById('metricsGrid');
-            grid.innerHTML = `
-                <div class="card" style="grid-column: 1 / -1;">
-                    <div style="color: var(--accent-red); text-align: center; padding: 2rem;">
-                        <h2>Error</h2>
-                        <p style="margin-top: 0.5rem; color: var(--text-secondary);">${message}</p>
+        function renderRunningTasks(taskStats) {
+            const grid = document.getElementById('runningTasksGrid');
+            const badge = document.getElementById('runningTasksBadge');
+
+            const runningCount = taskStats.by_status.in_progress || 0;
+            const pendingCount = taskStats.by_status.pending || 0;
+            const totalActive = runningCount + pendingCount;
+
+            badge.textContent = totalActive;
+
+            if (totalActive === 0) {
+                grid.innerHTML = '<div class="empty-state">No running tasks</div>';
+                return;
+            }
+
+            // For now, we show a placeholder since we need to modify the API to return actual task details
+            // We'll fetch running tasks separately
+            fetchRunningTasks();
+        }
+
+        async function fetchRunningTasks() {
+            try {
+                const response = await fetch('/api/tasks/running');
+                if (!response.ok) {
+                    // Fallback: Show count-based cards if endpoint doesn't exist yet
+                    showPlaceholderTasks();
+                    return;
+                }
+
+                const data = await response.json();
+                const grid = document.getElementById('runningTasksGrid');
+
+                if (!data.tasks || data.tasks.length === 0) {
+                    grid.innerHTML = '<div class="empty-state">No running tasks</div>';
+                    return;
+                }
+
+                grid.innerHTML = data.tasks.map(task => `
+                    <div class="task-card ${task.status}" onclick="showTaskDetail('${task.task_id}')">
+                        <div class="task-header">
+                            <div class="task-id">Task #${task.task_id}</div>
+                            <div class="task-status ${task.status}">${formatStatus(task.status)}</div>
+                        </div>
+                        <div class="task-description">${escapeHtml(task.description)}</div>
+                        <div class="task-meta">
+                            <div class="task-meta-item">
+                                <span>⚙️</span>
+                                <span>${task.worker_type}</span>
+                            </div>
+                            <div class="task-meta-item">
+                                <span>🧠</span>
+                                <span>${task.model}</span>
+                            </div>
+                        </div>
+                        ${task.latest_activity ? `
+                            <div class="task-activity">
+                                ${escapeHtml(task.latest_activity)}
+                            </div>
+                        ` : ''}
                     </div>
-                </div>
-            `;
+                `).join('');
+
+            } catch (error) {
+                console.error('Error fetching running tasks:', error);
+                showPlaceholderTasks();
+            }
         }
+
+        function showPlaceholderTasks() {
+            const grid = document.getElementById('runningTasksGrid');
+            grid.innerHTML = '<div class="empty-state">Enable task tracking to see running tasks</div>';
+        }
+
+        function renderActivityFeed(activity) {
+            const feed = document.getElementById('activityFeed');
+
+            if (!activity || activity.length === 0) {
+                feed.innerHTML = '<div class="no-data">No recent activity</div>';
+                return;
+            }
+
+            feed.innerHTML = activity.slice(0, 20).map(item => `
+                <div class="tool-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; width: 100%;">
+                        <div>
+                            <div class="tool-name">Task #${item.task_id}</div>
+                            <div class="tool-stats">${escapeHtml(item.description)}</div>
+                        </div>
+                        <div class="tool-stats">${formatRelativeTime(item.timestamp)}</div>
+                    </div>
+                    <div class="tool-stats">${escapeHtml(item.message)}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderToolsList(tools) {
+            const list = document.getElementById('toolsList');
+
+            if (!tools || tools.length === 0) {
+                list.innerHTML = '<div class="no-data">No tool usage data</div>';
+                return;
+            }
+
+            list.innerHTML = tools.slice(0, 10).map(tool => `
+                <div class="tool-item">
+                    <div>
+                        <div class="tool-name">${escapeHtml(tool.tool)}</div>
+                        <div class="tool-stats">${(tool.success_rate * 100).toFixed(0)}% success</div>
+                    </div>
+                    <div class="tool-count">${tool.count}</div>
+                </div>
+            `).join('');
+        }
+
+        async function showTaskDetail(taskId) {
+            currentTaskId = taskId;
+            const modal = document.getElementById('taskModal');
+            modal.classList.add('active');
+
+            document.getElementById('modalTaskTitle').textContent = `Task #${taskId}`;
+            document.getElementById('modalTaskSubtitle').textContent = 'Loading details...';
+            document.getElementById('taskToolUsage').innerHTML = '<div class="no-data">Loading...</div>';
+            document.getElementById('taskActivityLog').innerHTML = '<div class="no-data">Loading...</div>';
+
+            try {
+                // Fetch task details
+                const taskResponse = await fetch(`/api/tasks/${taskId}`);
+                const task = await taskResponse.json();
+
+                document.getElementById('modalTaskSubtitle').textContent = task.description;
+
+                // Render activity log
+                if (task.activity_log && task.activity_log.length > 0) {
+                    document.getElementById('taskActivityLog').innerHTML = task.activity_log.map(entry => `
+                        <div class="tool-item" style="margin-bottom: 0.5rem;">
+                            <div>
+                                <div class="tool-stats">${new Date(entry.timestamp).toLocaleString()}</div>
+                                <div style="margin-top: 0.25rem;">${escapeHtml(entry.message)}</div>
+                            </div>
+                        </div>
+                    `).reverse().join('');
+                } else {
+                    document.getElementById('taskActivityLog').innerHTML = '<div class="no-data">No activity yet</div>';
+                }
+
+                // Fetch session tool usage for this task
+                const sessionId = task.task_id; // Assuming task_id == session_id
+                const sessionResponse = await fetch(`/api/hooks/session/${sessionId}`);
+
+                if (sessionResponse.ok) {
+                    const session = await sessionResponse.json();
+                    renderTaskToolUsage(session);
+                } else {
+                    document.getElementById('taskToolUsage').innerHTML = '<div class="no-data">No tool usage data available</div>';
+                }
+
+            } catch (error) {
+                console.error('Error loading task details:', error);
+                document.getElementById('taskToolUsage').innerHTML = '<div class="no-data">Error loading tool usage</div>';
+                document.getElementById('taskActivityLog').innerHTML = '<div class="no-data">Error loading activity</div>';
+            }
+        }
+
+        function renderTaskToolUsage(session) {
+            const container = document.getElementById('taskToolUsage');
+
+            if (!session.summary || !session.summary.tools_by_type) {
+                container.innerHTML = '<div class="no-data">No tool usage data</div>';
+                return;
+            }
+
+            const toolsArray = Object.entries(session.summary.tools_by_type)
+                .map(([tool, count]) => ({ tool, count }))
+                .sort((a, b) => b.count - a.count);
+
+            if (toolsArray.length === 0) {
+                container.innerHTML = '<div class="no-data">No tools used yet</div>';
+                return;
+            }
+
+            container.innerHTML = toolsArray.map(item => `
+                <div class="tool-item">
+                    <div>
+                        <div class="tool-name">${escapeHtml(item.tool)}</div>
+                    </div>
+                    <div class="tool-count">${item.count}</div>
+                </div>
+            `).join('');
+        }
+
+        function closeTaskModal() {
+            document.getElementById('taskModal').classList.remove('active');
+            currentTaskId = null;
+        }
+
+        function showErrorsModal() {
+            const modal = document.getElementById('errorsModal');
+            modal.classList.add('active');
+
+            const errorsList = document.getElementById('errorsList');
+            errorsList.innerHTML = '<div class="no-data">Loading errors...</div>';
+
+            if (currentData && currentData.overview.system_health.recent_errors) {
+                const errors = currentData.overview.system_health.recent_errors;
+
+                if (errors.length === 0) {
+                    errorsList.innerHTML = '<div class="no-errors">No recent errors</div>';
+                    return;
+                }
+
+                errorsList.innerHTML = errors.map(error => `
+                    <div class="error-item">
+                        <div class="error-header">
+                            <div class="error-task-id">Task #${error.task_id}</div>
+                            <div class="error-time">${new Date(error.timestamp).toLocaleString()}</div>
+                        </div>
+                        <div class="error-message">${escapeHtml(error.error)}</div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function closeErrorsModal() {
+            document.getElementById('errorsModal').classList.remove('active');
+        }
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`${tabName}Tab`).classList.add('active');
+        }
+
+        function formatStatus(status) {
+            return status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+
+        function formatRelativeTime(timestamp) {
+            const now = new Date();
+            const then = new Date(timestamp);
+            const diffMs = now - then;
+            const diffSecs = Math.floor(diffMs / 1000);
+            const diffMins = Math.floor(diffSecs / 60);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+
+            if (diffSecs < 60) return `${diffSecs}s ago`;
+            if (diffMins < 60) return `${diffMins}m ago`;
+            if (diffHours < 24) return `${diffHours}h ago`;
+            return `${diffDays}d ago`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Close modals on background click
+        document.getElementById('taskModal').addEventListener('click', (e) => {
+            if (e.target.id === 'taskModal') {
+                closeTaskModal();
+            }
+        });
+
+        document.getElementById('errorsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'errorsModal') {
+                closeErrorsModal();
+            }
+        });
+
+        // Close modals on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeTaskModal();
+                closeErrorsModal();
+            }
+        });
     </script>
 </body>
 </html>

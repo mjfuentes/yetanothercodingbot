@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 CORS(app)  # Enable CORS for API access
 
 # Initialize tracking systems (determine data paths based on where we're running from)
@@ -58,16 +60,13 @@ def index():
     return render_template("dashboard.html")
 
 
-@app.route("/telegram")
-def telegram():
-    """Serve the Telegram Web embed page"""
-    return render_template("telegram.html")
-
-
 @app.route("/api/metrics/overview")
 def metrics_overview():
     """Get overview of all metrics"""
     try:
+        # Reload tasks to get latest state
+        task_manager.reload_tasks()
+
         hours = int(request.args.get("hours", 24))
         snapshot = metrics_aggregator.get_complete_snapshot(hours=hours)
         return jsonify(snapshot.to_dict())
@@ -92,6 +91,8 @@ def claude_api_metrics():
 def task_metrics():
     """Get task execution metrics"""
     try:
+        # Reload tasks to get latest state
+        task_manager.reload_tasks()
         metrics = metrics_aggregator.get_task_statistics()
         return jsonify(metrics)
     except Exception as e:
@@ -103,6 +104,9 @@ def task_metrics():
 def task_activity():
     """Get recent task activity for live feed"""
     try:
+        # Reload tasks to get latest state
+        task_manager.reload_tasks()
+
         limit = int(request.args.get("limit", 50))
         user_id = request.args.get("user_id")  # Optional filter by user
 
@@ -279,6 +283,63 @@ def claude_sessions_metrics():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/tasks/running")
+def running_tasks():
+    """Get list of currently running tasks"""
+    try:
+        # Reload tasks from disk to get latest state
+        task_manager.reload_tasks()
+
+        # Get tasks with status 'in_progress' or 'pending'
+        running = []
+        for task in task_manager.tasks.values():
+            if task.status in ["in_progress", "pending"]:
+                # Get latest activity message
+                latest_activity = None
+                if task.activity_log and len(task.activity_log) > 0:
+                    latest_activity = task.activity_log[-1]["message"]
+
+                running.append(
+                    {
+                        "task_id": task.task_id,
+                        "description": task.description,
+                        "status": task.status,
+                        "worker_type": task.worker_type,
+                        "model": task.model,
+                        "created_at": task.created_at,
+                        "latest_activity": latest_activity,
+                    }
+                )
+
+        # Sort by updated_at (most recent first)
+        running.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+
+        return jsonify({"tasks": running, "total": len(running)})
+
+    except Exception as e:
+        logger.error(f"Error getting running tasks: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tasks/<task_id>")
+def task_detail(task_id: str):
+    """Get detailed information about a specific task"""
+    try:
+        # Reload tasks to get latest state
+        task_manager.reload_tasks()
+
+        task = task_manager.tasks.get(task_id)
+
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+
+        return jsonify(task.to_dict())
+
+    except Exception as e:
+        logger.error(f"Error getting task detail: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health")
 def health_check():
     """Health check endpoint"""
@@ -300,9 +361,21 @@ def generate_sse_updates(hours: int = 24) -> Generator[str, None, None]:
 
     while True:
         try:
+            # Reload tasks to get latest state
+            task_manager.reload_tasks()
+
             # Gather all metrics
             overview = metrics_aggregator.get_complete_snapshot(hours=hours)
-            sessions_metrics = metrics_aggregator.get_claude_api_metrics(hours=hours)
+            sessions_stats = hooks_reader.get_aggregate_statistics(hours=hours)
+            sessions_metrics = {
+                "total_sessions": sessions_stats["total_sessions"],
+                "total_tool_calls": sessions_stats["total_tool_calls"],
+                "tools_by_type": sessions_stats["tools_by_type"],
+                "blocked_operations": sessions_stats["total_blocked_operations"],
+                "errors": sessions_stats["total_errors"],
+                "time_window_hours": hours,
+                "recent_sessions": sessions_stats["recent_sessions"],
+            }
             activity = []
 
             # Get recent task activity

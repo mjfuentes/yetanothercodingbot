@@ -111,7 +111,7 @@ class ClaudeInteractiveSession:
         Args:
             message: The message to send to Claude
             progress_callback: Optional callback for progress updates. Called with (status_message, elapsed_seconds)
-            heartbeat_interval: Send heartbeat updates every N seconds (default: 30)
+            heartbeat_interval: Unused in this implementation (kept for compatibility)
 
         Note: This closes stdin after sending the message, which causes the claude chat
         process to execute and exit. This is intentional for background task execution.
@@ -128,9 +128,8 @@ class ClaudeInteractiveSession:
             await self.process.stdin.wait_closed()  # Wait for stdin to actually close
             logger.debug(f"Sent message to Claude and closed stdin (task {self.task_id})")
 
-            # Stream output with periodic updates
+            # Stream output
             start_time = time.time()
-            last_heartbeat = start_time
             stdout_chunks = []
             stderr_chunks = []
 
@@ -151,22 +150,6 @@ class ClaudeInteractiveSession:
             # Start reading both streams
             stdout_task = asyncio.create_task(read_stream(self.process.stdout, stdout_chunks, "stdout"))
             stderr_task = asyncio.create_task(read_stream(self.process.stderr, stderr_chunks, "stderr"))
-
-            # Monitor progress while streams are being read
-            while not stdout_task.done() or not stderr_task.done():
-                await asyncio.sleep(1)
-
-                elapsed = int(time.time() - start_time)
-                time_since_heartbeat = time.time() - last_heartbeat
-
-                # Send periodic heartbeat updates
-                if progress_callback and time_since_heartbeat >= heartbeat_interval:
-                    output_so_far = len(stdout_chunks)
-                    if output_so_far > 0:
-                        progress_callback(f"Still working... ({output_so_far} output lines, {elapsed}s)", elapsed)
-                    else:
-                        progress_callback(f"Still working... (no output yet, {elapsed}s)", elapsed)
-                    last_heartbeat = time.time()
 
             # Wait for both streams to finish
             await asyncio.gather(stdout_task, stderr_task)
@@ -321,7 +304,6 @@ class ClaudeSessionPool:
         agent: str | None = None,
         pid_callback: Callable[[int], None] | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
-        heartbeat_interval: int = 30,
     ) -> tuple[bool, str, int | None]:
         """Execute a task using session pool
 
@@ -331,7 +313,6 @@ class ClaudeSessionPool:
                          Format: pid_callback(pid: int)
             progress_callback: Optional callback for progress updates
                               Format: progress_callback(status_message: str, elapsed_seconds: int)
-            heartbeat_interval: Send heartbeat updates every N seconds (default: 30)
 
         Returns:
             (success, result, pid) - pid is the Claude process ID if available
@@ -395,9 +376,7 @@ You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
 Complete the task and provide a concise summary of what you did."""
 
             # Execute task with streaming and progress updates
-            response = await session.send_message_with_streaming(
-                prompt, progress_callback=progress_callback, heartbeat_interval=heartbeat_interval
-            )
+            response = await session.send_message_with_streaming(prompt, progress_callback=progress_callback)
 
             # Cleanup
             await session.terminate()

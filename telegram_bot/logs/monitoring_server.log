@@ -1,0 +1,5 @@
+2025-10-18 14:36:39,063 - __main__ - INFO - Starting monitoring server on 0.0.0.0:3000
+ * Serving Flask app 'monitoring_server'
+ * Debug mode: off
+Address already in use
+Port 3000 is in use by another program. Either identify and stop that program, or start the server with a different port.

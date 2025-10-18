@@ -127,6 +127,26 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error loading tasks: {e}")
 
+    def reload_tasks(self):
+        """
+        Reload tasks from disk to get latest state.
+        Useful for monitoring/read-only access to task data.
+        """
+        if not self.tasks_file.exists():
+            return
+
+        try:
+            with open(self.tasks_file) as f:
+                data = json.load(f)
+                self.tasks.clear()
+                for task_id, task_data in data.items():
+                    self.tasks[task_id] = Task.from_dict(task_data)
+
+            logger.debug(f"Reloaded {len(self.tasks)} tasks from disk")
+
+        except Exception as e:
+            logger.error(f"Error reloading tasks: {e}")
+
     def _save_tasks(self):
         """Save tasks to disk"""
         try:
