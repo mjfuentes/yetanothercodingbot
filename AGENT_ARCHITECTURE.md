@@ -6,9 +6,11 @@
 
 The Telegram bot uses Claude Code's native agent system with a clear separation of concerns:
 - **Orchestrator**: Routes queries, answers questions, reads/analyzes files
-- **code_worker**: Executes all file operations, edits, and git commands
+- **code_worker**: Executes backend coding tasks, file operations, edits, and git commands
+- **frontend_worker**: Specialized for frontend/web development with Chrome DevTools validation
+- **research_worker**: Analyzes code and proposes improvements without implementing
 
-This refactoring ensures orchestrator never attempts writes or bash execution - it spawns code_worker instead.
+This refactoring ensures orchestrator never attempts writes or bash execution - it spawns specialized workers instead.
 
 ## Architecture
 
@@ -29,9 +31,14 @@ Claude Code Orchestrator Agent (.claude/agents/orchestrator.md)
     │   ↓
     │   └─ If approved: Spawn Code Worker
     │
-    └─ Task: Spawn Code Worker (.claude/agents/code_worker.md)
-       ├─ Direct coding task
-       └─ Implement approved proposal
+    ├─ Task: Spawn Code Worker (.claude/agents/code_worker.md)
+    │  ├─ Backend coding tasks
+    │  └─ Implement approved proposal
+    │  ↓ Returns result
+    │
+    └─ Task: Spawn Frontend Worker (.claude/agents/frontend_worker.md)
+       ├─ Web/UI development tasks
+       └─ Uses Chrome DevTools for validation
        ↓ Returns result
 Orchestrator composes response
     ↓
@@ -108,11 +115,11 @@ This workflow prevents implementing changes the user didn't specifically approve
 
 **Output**: Markdown proposal document for user review
 
-**Next Step**: If user approves proposal, orchestrator spawns code_worker to implement
+**Next Step**: If user approves proposal, orchestrator spawns code_worker or frontend_worker to implement
 
 ### 3. Code Worker Agent (`.claude/agents/code_worker.md`)
 
-**Role**: Executes all file operations and code changes
+**Role**: Executes backend coding tasks and general file operations
 
 **Responsibilities**:
 - Read, write, edit files
@@ -129,7 +136,38 @@ This workflow prevents implementing changes the user didn't specifically approve
 
 **Key Policy**: Always commits changes after modifications
 
-### 3. Orchestrator Integration (`telegram_bot/orchestrator.py`)
+### 4. Frontend Worker Agent (`.claude/agents/frontend_worker.md`)
+
+**Role**: Specialized frontend development with visual validation
+
+**Responsibilities**:
+- Build and modify web UIs (HTML, CSS, JavaScript)
+- Implement responsive designs and layouts
+- Navigate reference websites and extract design patterns
+- Take screenshots and snapshots for validation
+- Compare implementations against reference examples
+- Test across different viewport sizes
+- Validate visual design matches requirements
+
+**Tools**: Read, Write, Edit, Glob, Grep, Bash, Chrome DevTools MCP (all browser tools)
+
+**Spawned by**: Orchestrator when user requests involve:
+- "website", "web page", "landing page", "portfolio"
+- "UI", "UX", "design", "styling", "layout"
+- "HTML", "CSS", "JavaScript", "frontend"
+- "gallery", "navigation", "header", "footer"
+- Design references: "copy this design", "similar to this site"
+
+**Workflow**:
+1. Analyze reference examples if provided (navigate, screenshot, inspect)
+2. Extract design tokens (fonts, colors, spacing, layout)
+3. Implement incrementally (structure → styles → responsive → interactions)
+4. Validate continuously (screenshots, comparisons, responsive testing)
+5. Iterate until implementation matches requirements
+
+**Key Policy**: Extensive use of Chrome DevTools for visual validation throughout development
+
+### 5. Orchestrator Integration (`telegram_bot/orchestrator.py`)
 
 **Purpose**: Bridge between bot and Claude Code orchestrator agent
 
@@ -296,14 +334,17 @@ The orchestrator maintains context across turns to track proposals:
 ## Testing Checklist
 
 - [ ] Simple query: "What's async/await in Python?" (direct response)
-- [ ] Code fix: "Fix the bug in auth.py line 42" (Task tool spawns code_worker)
+- [ ] Code fix: "Fix the bug in auth.py line 42" (BACKGROUND_TASK with code_worker)
 - [ ] Own repo: "Add a /restart command to your code" (code_worker in bot_repository)
 - [ ] Other repo: "in ~/myproject, fix bug in app.py" (code_worker in specified workspace)
 - [ ] Voice input: "add a logging function" (permissive with errors)
 - [ ] Background task: "refactor the entire authentication system" (BACKGROUND_TASK format)
 - [ ] Research request: "improve the error handling" (Task tool spawns research_worker)
 - [ ] Research approval: User says "approve" after seeing proposal (Task tool spawns code_worker)
-- [ ] Check logs show correct agents being spawned
+- [ ] Frontend task: "build a portfolio website" (BACKGROUND_TASK with frontend_worker)
+- [ ] Frontend with reference: "copy the design from https://example.com" (frontend_worker)
+- [ ] Frontend styling: "update the gallery layout" (frontend_worker)
+- [ ] Check logs show correct worker types being spawned (code_worker vs frontend_worker)
 
 ## Future Enhancements
 
@@ -316,8 +357,10 @@ The orchestrator maintains context across turns to track proposals:
 ## Configuration
 
 Agent files location: `.claude/agents/`
-- `orchestrator.md` - Main orchestrator
-- `code_worker.md` - Code execution worker
+- `orchestrator.md` - Main orchestrator and router
+- `code_worker.md` - Backend code execution worker
+- `frontend_worker.md` - Frontend development worker with Chrome DevTools
+- `research_worker.md` - Analysis and proposal worker
 
 Bot configuration: `.env`
 ```bash
@@ -400,6 +443,53 @@ code_worker: Implements refined changes
 Bot: "Done. Refactored API with better modularization."
 ```
 
+### Example 8: Frontend Development (frontend_worker spawned)
+```
+User: "Build a portfolio website with a gallery similar to https://example.com/gallery"
+Bot: Orchestrator recognizes frontend task, returns BACKGROUND_TASK format with frontend_worker
+Bot: Creates background task, sends: "Background Task Started (#abc). Creating a portfolio website with gallery."
+frontend_worker:
+  1. Navigates to https://example.com/gallery
+  2. Takes screenshot of reference design
+  3. Takes snapshot to inspect DOM structure
+  4. Analyzes: 3-column masonry layout, minimal gaps, rounded corners
+  5. Extracts: Google Font links, color palette, spacing values
+  6. Implements HTML structure
+  7. Adds CSS with extracted design tokens
+  8. Takes screenshot of implementation
+  9. Compares side-by-side with reference
+  10. Adjusts spacing and styling to match
+  11. Tests responsive behavior (desktop, tablet, mobile)
+  12. Commits changes
+Bot: Notifies user with result and screenshots showing comparison
+```
+
+### Example 9: Frontend Task with Exact Copy Request
+```
+User: "Copy the design from https://example.com exactly for my landing page"
+Bot: Orchestrator recognizes frontend copy task, returns BACKGROUND_TASK with frontend_worker
+frontend_worker:
+  1. Navigates to https://example.com
+  2. Screenshots entire page
+  3. Inspects header, hero, sections, footer
+  4. Extracts ALL design tokens:
+     - Fonts: Checks <link> tags for Google Fonts (e.g., 'Inter', 'Playfair Display')
+     - Colors: Inspects all color values (#1a1a1a, #f5f5f5, etc.)
+     - Spacing: Measures margins (80px sections), padding (24px), gaps (16px)
+     - Layout: Identifies CSS Grid (1fr 1fr 1fr), max-width: 1200px
+  5. Creates matching HTML structure with semantic tags
+  6. Imports exact same Google Fonts
+  7. Uses extracted color values in CSS
+  8. Matches spacing pixel-perfect
+  9. Implements responsive breakpoints to match reference
+  10. Screenshots implementation
+  11. Compares side-by-side with reference
+  12. Iterates on differences (font sizes, line heights, shadows)
+  13. Final validation across all sections
+  14. Commits with descriptive message
+Bot: Notifies with "Landing page created matching https://example.com design"
+```
+
 ## Refactoring Summary (October 17, 2025 + Research Worker Enhancement)
 
 **Phase 1 - Proper Separation of Concerns** (October 17, 2025):
@@ -408,25 +498,38 @@ Bot: "Done. Refactored API with better modularization."
 3. Added clear routing logic: Direct response, code_worker task, or background task
 4. code_worker now commits changes automatically
 
-**Phase 2 - Two-Phase Approval Workflow** (New):
+**Phase 2 - Two-Phase Approval Workflow**:
 5. Added research_worker for analysis and proposals without implementation
 6. Orchestrator can spawn research_worker for improvement requests
 7. Proposal-approval workflow prevents unintended changes
 8. Two-phase process: Research → Display Proposal → Approval → Implement
 
+**Phase 3 - Specialized Frontend Worker** (October 18, 2025):
+9. Added frontend_worker specialized for web UI/UX development
+10. Chrome DevTools MCP integration for visual validation
+11. Orchestrator routes frontend tasks based on keywords
+12. Worker type selection system: code_worker vs frontend_worker
+13. Background task format extended to support worker_type specification
+
 **Benefits**:
-- Clear separation of concerns
+- Clear separation of concerns between agent types
 - Orchestrator focuses on routing and agent management
 - research_worker handles analysis and proposals (Read-only)
-- code_worker handles all state changes
+- code_worker handles backend coding and general file operations
+- frontend_worker handles web development with visual validation
 - Users can review proposals before implementation
-- Easier to test and maintain
-- Better error handling per agent
+- Specialized workers leverage appropriate tools (Chrome DevTools for frontend)
+- Easier to test and maintain with focused responsibilities
+- Better error handling per agent type
 - Logs clearly show which agents are spawned
 
 **Files Modified**:
-- `.claude/agents/orchestrator.md` - Updated with research_worker routing and workflow
-- `.claude/agents/code_worker.md` - Added Git Commit Policy (unchanged)
-- `.claude/agents/research_worker.md` - NEW: Analysis and proposal agent
-- `telegram_bot/orchestrator.py` - Infrastructure ready for proposals (no changes needed yet)
-- `AGENT_ARCHITECTURE.md` - Documented new research_worker and two-phase workflow
+- `.claude/agents/orchestrator.md` - Updated with worker type selection and routing
+- `.claude/agents/code_worker.md` - Backend coding worker
+- `.claude/agents/frontend_worker.md` - NEW: Frontend development worker with Chrome DevTools
+- `.claude/agents/research_worker.md` - Analysis and proposal agent
+- `telegram_bot/claude_api.py` - Extended BACKGROUND_TASK parsing for worker_type
+- `telegram_bot/tasks.py` - Added worker_type field to Task dataclass
+- `telegram_bot/claude_interactive.py` - Added agent parameter to session spawning
+- `telegram_bot/main.py` - Pass worker_type when creating and executing tasks
+- `AGENT_ARCHITECTURE.md` - Documented frontend_worker and worker type system

@@ -1,16 +1,20 @@
 """
 Flask-based monitoring server for bot metrics
-Provides web UI and REST API for real-time metrics
+Provides web UI and REST API for real-time metrics with SSE support
 """
 
+import json
 import logging
 import os
+import time
+from collections.abc import Generator
 from pathlib import Path
 
 from cost_tracker import CostTracker
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 from flask_cors import CORS
+from hooks_reader import HooksReader
 from metrics_aggregator import MetricsAggregator
 from tasks import TaskManager
 from tool_usage_tracker import ToolUsageTracker
@@ -25,13 +29,27 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)  # Enable CORS for API access
 
-# Initialize tracking systems (use parent directory for data)
-cost_tracker = CostTracker(data_dir="../data")
-task_manager = TaskManager(data_dir="../data")
-tool_usage_tracker = ToolUsageTracker(data_dir="../data")
+# Initialize tracking systems (determine data paths based on where we're running from)
+
+if Path.cwd().name == "telegram_bot":
+    # Running from telegram_bot/ directory
+    data_dir = "../data"
+    sessions_dir = "../logs/sessions"
+else:
+    # Running from project root
+    data_dir = "data"
+    sessions_dir = "logs/sessions"
+
+cost_tracker = CostTracker(data_dir=data_dir)
+task_manager = TaskManager(data_dir=data_dir)
+tool_usage_tracker = ToolUsageTracker(data_dir=data_dir)
+hooks_reader = HooksReader(sessions_dir=sessions_dir)
 
 # Initialize metrics aggregator
-metrics_aggregator = MetricsAggregator(cost_tracker, task_manager, tool_usage_tracker)
+metrics_aggregator = MetricsAggregator(cost_tracker, task_manager, tool_usage_tracker, hooks_reader)
+
+# Store last sent data for change detection
+last_metrics_snapshot = None
 
 
 @app.route("/")
@@ -81,13 +99,81 @@ def task_metrics():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/tasks/activity")
+def task_activity():
+    """Get recent task activity for live feed"""
+    try:
+        limit = int(request.args.get("limit", 50))
+        user_id = request.args.get("user_id")  # Optional filter by user
+
+        # Get all tasks or filter by user
+        all_tasks = []
+        for task in task_manager.tasks.values():
+            if user_id and task.user_id != int(user_id):
+                continue
+            all_tasks.append(task)
+
+        # Sort by updated_at (most recent first)
+        all_tasks.sort(key=lambda t: t.updated_at, reverse=True)
+
+        # Build activity feed from task activity logs
+        activity_feed = []
+        for task in all_tasks[:limit]:
+            # Add each activity entry
+            if task.activity_log:
+                for activity in reversed(task.activity_log[-10:]):  # Last 10 per task
+                    activity_feed.append(
+                        {
+                            "task_id": task.task_id,
+                            "description": task.description[:50],
+                            "status": task.status,
+                            "timestamp": activity["timestamp"],
+                            "message": activity["message"],
+                            "output_lines": activity.get("output_lines"),
+                        }
+                    )
+
+        # Sort all activity by timestamp (most recent first)
+        activity_feed.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        return jsonify({"activity": activity_feed[:limit], "total": len(activity_feed)})
+
+    except Exception as e:
+        logger.error(f"Error getting task activity: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/metrics/tools")
 def tool_metrics():
-    """Get tool usage metrics"""
+    """Get tool usage metrics from Claude Code hooks"""
     try:
         hours = int(request.args.get("hours", 24))
-        metrics = metrics_aggregator.get_tool_usage_metrics(hours=hours)
-        return jsonify(metrics)
+        # Use hooks data instead of ToolUsageTracker (which isn't populated)
+        hooks_stats = hooks_reader.get_aggregate_statistics(hours=hours)
+
+        # Convert to expected format
+        tools_breakdown = hooks_stats["tools_by_type"]
+        most_used = sorted(
+            [
+                {"tool": k, "count": v, "success_rate": 100.0, "avg_duration_ms": 0.0}
+                for k, v in tools_breakdown.items()
+            ],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:10]
+
+        # Get agent status from ToolUsageTracker (still useful)
+        status_summary = tool_usage_tracker.get_agent_status_summary()
+
+        return jsonify(
+            {
+                "time_window_hours": hours,
+                "total_tool_calls": hooks_stats["total_tool_calls"],
+                "tools_breakdown": tools_breakdown,
+                "most_used_tools": most_used,
+                "agent_status": status_summary,
+            }
+        )
     except Exception as e:
         logger.error(f"Error getting tool metrics: {e}")
         return jsonify({"error": str(e)}), 500
@@ -95,12 +181,51 @@ def tool_metrics():
 
 @app.route("/api/metrics/hooks")
 def hook_metrics():
-    """Get hook usage metrics"""
+    """Get hook usage metrics from Claude Code hook logs"""
     try:
-        metrics = metrics_aggregator.get_hook_usage_summary()
-        return jsonify(metrics)
+        hours = int(request.args.get("hours", 24))
+        stats = hooks_reader.get_aggregate_statistics(hours=hours)
+        return jsonify(stats)
     except Exception as e:
         logger.error(f"Error getting hook metrics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/hooks/sessions")
+def hook_sessions():
+    """Get list of all hook sessions"""
+    try:
+        sessions = hooks_reader.get_all_sessions()
+        return jsonify({"sessions": sessions, "total": len(sessions)})
+    except Exception as e:
+        logger.error(f"Error getting sessions: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/hooks/session/<session_id>")
+def hook_session_detail(session_id: str):
+    """Get detailed timeline for a specific session"""
+    try:
+        summary = hooks_reader.read_session_summary(session_id)
+        timeline = hooks_reader.get_session_timeline(session_id)
+
+        if not summary:
+            return jsonify({"error": "Session not found"}), 404
+
+        return jsonify(
+            {
+                "session_id": session_id,
+                "summary": {
+                    "total_tools": summary.total_tools,
+                    "tools_by_type": summary.tools_by_type,
+                    "blocked_operations": summary.blocked_operations,
+                    "tools_with_errors": summary.tools_with_errors,
+                },
+                "timeline": timeline,
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting session detail: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -128,76 +253,30 @@ def timeseries_data():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/metrics/usage-api")
-def usage_api_metrics():
-    """Get real-time usage from Anthropic Usage API"""
+@app.route("/api/metrics/claude-sessions")
+def claude_sessions_metrics():
+    """Get Claude Code session metrics"""
     try:
-        import os
-        from datetime import datetime
+        hours = int(request.args.get("hours", 24))
 
-        from usage_api import ClaudeUsageAPI
-
-        # Check if admin API key is configured
-        admin_key = os.getenv("ANTHROPIC_ADMIN_API_KEY")
-        if not admin_key:
-            return jsonify({"error": "ANTHROPIC_ADMIN_API_KEY not configured", "configured": False})
-
-        # Initialize Usage API client
-        usage_api = ClaudeUsageAPI(admin_api_key=admin_key)
-
-        # Get current month data
-        now = datetime.now()
-        start_of_month = datetime(now.year, now.month, 1)
-
-        # Get usage and cost reports
-        usage_data = usage_api.get_usage_report(
-            starting_at=start_of_month, ending_at=now, bucket_width="1d", group_by=["model"]
-        )
-
-        cost_data = usage_api.get_cost_report(starting_at=start_of_month, ending_at=now)
-
-        # Calculate totals
-        total_input = 0
-        total_output = 0
-        total_cached = 0
-        model_breakdown = {}
-
-        for bucket in usage_data.get("buckets", []):
-            for group in bucket.get("groups", []):
-                model = group.get("model", "unknown")
-                metrics = group.get("metrics", {})
-
-                input_tokens = metrics.get("input_tokens", 0)
-                output_tokens = metrics.get("output_tokens", 0)
-                cached_tokens = metrics.get("cached_input_tokens", 0)
-
-                total_input += input_tokens
-                total_output += output_tokens
-                total_cached += cached_tokens
-
-                if model not in model_breakdown:
-                    model_breakdown[model] = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
-
-                model_breakdown[model]["input_tokens"] += input_tokens
-                model_breakdown[model]["output_tokens"] += output_tokens
-                model_breakdown[model]["cached_tokens"] += cached_tokens
+        # Get sessions from hooks reader
+        sessions_stats = hooks_reader.get_aggregate_statistics(hours=hours)
 
         return jsonify(
             {
-                "configured": True,
-                "total_cost": float(cost_data.get("total_cost", "0.00")),
-                "total_input_tokens": total_input,
-                "total_output_tokens": total_output,
-                "total_cached_tokens": total_cached,
-                "total_tokens": total_input + total_output + total_cached,
-                "model_breakdown": model_breakdown,
-                "period": {"start": start_of_month.isoformat(), "end": now.isoformat()},
+                "total_sessions": sessions_stats["total_sessions"],
+                "total_tool_calls": sessions_stats["total_tool_calls"],
+                "tools_by_type": sessions_stats["tools_by_type"],
+                "blocked_operations": sessions_stats["total_blocked_operations"],
+                "errors": sessions_stats["total_errors"],
+                "time_window_hours": hours,
+                "recent_sessions": sessions_stats["recent_sessions"],
             }
         )
 
     except Exception as e:
-        logger.error(f"Error getting Usage API metrics: {e}")
-        return jsonify({"error": str(e), "configured": False}), 500
+        logger.error(f"Error getting Claude sessions metrics: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/health")
@@ -209,6 +288,96 @@ def health_check():
             "service": "bot-monitoring",
             "version": "1.0.0",
         }
+    )
+
+
+def generate_sse_updates(hours: int = 24) -> Generator[str, None, None]:
+    """
+    Generator function that yields SSE-formatted metric updates.
+    Polls metrics every 2 seconds and sends updates only when data changes.
+    """
+    global last_metrics_snapshot
+
+    while True:
+        try:
+            # Gather all metrics
+            overview = metrics_aggregator.get_complete_snapshot(hours=hours)
+            sessions_metrics = metrics_aggregator.get_claude_api_metrics(hours=hours)
+            activity = []
+
+            # Get recent task activity
+            limit = 20
+            all_tasks = list(task_manager.tasks.values())
+            all_tasks.sort(key=lambda t: t.updated_at, reverse=True)
+
+            for task in all_tasks[:limit]:
+                if task.activity_log:
+                    for activity_entry in reversed(task.activity_log[-10:]):
+                        activity.append(
+                            {
+                                "task_id": task.task_id,
+                                "description": task.description[:50],
+                                "status": task.status,
+                                "timestamp": activity_entry["timestamp"],
+                                "message": activity_entry["message"],
+                                "output_lines": activity_entry.get("output_lines"),
+                            }
+                        )
+
+            activity.sort(key=lambda x: x["timestamp"], reverse=True)
+            activity = activity[:limit]
+
+            # Create current snapshot
+            current_snapshot = {
+                "overview": overview.to_dict(),
+                "sessions": sessions_metrics,
+                "activity": activity,
+                "timestamp": time.time(),
+            }
+
+            # Convert to JSON for comparison
+            current_json = json.dumps(current_snapshot, sort_keys=True)
+            last_json = json.dumps(last_metrics_snapshot, sort_keys=True) if last_metrics_snapshot else None
+
+            # Only send if data has changed or this is the first update
+            if current_json != last_json:
+                last_metrics_snapshot = current_snapshot
+
+                # Format as SSE event
+                data = json.dumps(current_snapshot)
+                yield f"data: {data}\n\n"
+
+                logger.debug("Sent SSE update - metrics changed")
+            else:
+                # Send heartbeat to keep connection alive
+                yield ": heartbeat\n\n"
+                logger.debug("Sent SSE heartbeat - no changes")
+
+        except Exception as e:
+            logger.error(f"Error generating SSE update: {e}")
+            error_data = json.dumps({"error": str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
+
+        # Poll every 2 seconds for much faster updates than 30s
+        time.sleep(2)
+
+
+@app.route("/api/stream/metrics")
+def stream_metrics():
+    """
+    Server-Sent Events endpoint for real-time metrics updates.
+    Clients connect via EventSource and receive updates whenever metrics change.
+    """
+    hours = int(request.args.get("hours", 24))
+
+    return Response(
+        generate_sse_updates(hours=hours),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "Connection": "keep-alive",
+        },
     )
 
 

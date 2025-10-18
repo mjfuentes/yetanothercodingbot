@@ -360,6 +360,41 @@
             padding: 1.5rem;
         }
 
+        .activity-feed-item {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: var(--bg-tertiary);
+            border-radius: 0.375rem;
+            border-left: 3px solid var(--accent-blue);
+        }
+
+        .activity-feed-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .activity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.25rem;
+        }
+
+        .activity-task {
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: var(--accent-blue);
+        }
+
+        .activity-time {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .activity-message {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
         .loading {
             text-align: center;
             padding: 2rem;
@@ -418,91 +453,99 @@
 
     <script>
         let currentTimeRange = 24;
-        let refreshInterval = null;
-        let countdownInterval = null;
+        let eventSource = null;
         let autoRefreshEnabled = true;
-        let nextRefreshTime = null;
-        const REFRESH_INTERVAL_MS = 30000; // 30 seconds
+        let lastUpdateTime = null;
+        let connectionRetryCount = 0;
+        const MAX_RETRY_COUNT = 5;
 
         document.addEventListener('DOMContentLoaded', () => {
-            loadMetrics();
-            startAutoRefresh();
+            startRealtimeUpdates();
         });
 
         function setTimeRange(hours) {
             currentTimeRange = hours;
             document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
             event.target.classList.add('active');
-            loadMetrics();
+
+            // Restart SSE connection with new time range
+            stopRealtimeUpdates();
+            startRealtimeUpdates();
         }
 
-        async function loadMetrics() {
+        function startRealtimeUpdates() {
+            if (!autoRefreshEnabled) return;
+
+            // Close existing connection if any
+            if (eventSource) {
+                eventSource.close();
+            }
+
             showRefreshIndicator();
 
-            try {
-                const response = await fetch(`/api/metrics/overview?hours=${currentTimeRange}`);
-                const data = await response.json();
+            // Create new EventSource connection
+            eventSource = new EventSource(`/api/stream/metrics?hours=${currentTimeRange}`);
 
-                // Also fetch Usage API data
-                const usageApiResponse = await fetch('/api/metrics/usage-api');
-                const usageApiData = await usageApiResponse.json();
+            eventSource.onopen = () => {
+                console.log('SSE connection established');
+                connectionRetryCount = 0;
+                updateConnectionStatus('Connected');
+            };
 
-                renderMetrics(data, usageApiData);
-            } catch (error) {
-                console.error('Error loading metrics:', error);
-                showError('Failed to load metrics. Please try again.');
-            } finally {
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    // Update metrics with real-time data
+                    renderMetrics(data.overview, data.sessions, {activity: data.activity});
+
+                    // Update timestamp
+                    lastUpdateTime = new Date();
+                    updateConnectionStatus('Live');
+                    hideRefreshIndicator();
+
+                } catch (error) {
+                    console.error('Error parsing SSE data:', error);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE connection error:', error);
                 hideRefreshIndicator();
-            }
+
+                connectionRetryCount++;
+
+                if (connectionRetryCount >= MAX_RETRY_COUNT) {
+                    updateConnectionStatus('Connection failed - retrying...');
+                    eventSource.close();
+
+                    // Retry after 5 seconds
+                    setTimeout(() => {
+                        connectionRetryCount = 0;
+                        startRealtimeUpdates();
+                    }, 5000);
+                } else {
+                    updateConnectionStatus('Reconnecting...');
+                }
+            };
         }
 
-        function renderMetrics(data, usageApiData) {
+        function stopRealtimeUpdates() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            updateConnectionStatus('Disconnected');
+        }
+
+        function renderMetrics(data, claudeSessionsData, activityData) {
             const grid = document.getElementById('metricsGrid');
 
-            // Build Usage API card if configured
-            let usageApiCard = '';
-            if (usageApiData && usageApiData.configured) {
-                usageApiCard = `
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="card-icon" style="background: rgba(236, 72, 153, 0.15); color: #ec4899;">🔗</div>
-                            <h2 class="card-title">Anthropic Usage API</h2>
-                        </div>
-                        <div class="metrics">
-                            <div class="metric">
-                                <span class="metric-label">Total Cost (Month)</span>
-                                <span class="metric-value value-cost">$${usageApiData.total_cost.toFixed(2)}</span>
-                            </div>
-                            <div class="metric">
-                                <span class="metric-label">Total Tokens</span>
-                                <span class="metric-value">${(usageApiData.total_tokens / 1000000).toFixed(2)}M</span>
-                            </div>
-                            <div class="metric">
-                                <span class="metric-label">Input Tokens</span>
-                                <span class="metric-value">${(usageApiData.total_input_tokens / 1000000).toFixed(2)}M</span>
-                            </div>
-                            <div class="metric">
-                                <span class="metric-label">Output Tokens</span>
-                                <span class="metric-value">${(usageApiData.total_output_tokens / 1000000).toFixed(2)}M</span>
-                            </div>
-                            ${usageApiData.total_cached_tokens > 0 ? `
-                            <div class="metric">
-                                <span class="metric-label">Cached Tokens</span>
-                                <span class="metric-value">${(usageApiData.total_cached_tokens / 1000000).toFixed(2)}M</span>
-                            </div>
-                            ` : ''}
-                        </div>
-                        ${renderUsageApiModels(usageApiData.model_breakdown)}
-                    </div>
-                `;
-            }
-
             grid.innerHTML = `
-                ${usageApiCard}
                 <div class="card">
                     <div class="card-header">
                         <div class="card-icon icon-api">API</div>
-                        <h2 class="card-title">Local Tracking</h2>
+                        <h2 class="card-title">Claude Usage</h2>
                     </div>
                     <div class="metrics">
                         <div class="metric">
@@ -510,12 +553,20 @@
                             <span class="metric-value value-cost">$${data.claude_api_usage.total_cost.toFixed(2)}</span>
                         </div>
                         <div class="metric">
-                            <span class="metric-label">Total Requests</span>
+                            <span class="metric-label">API Requests</span>
                             <span class="metric-value">${data.claude_api_usage.total_requests.toLocaleString()}</span>
                         </div>
                         <div class="metric">
+                            <span class="metric-label">Code Sessions</span>
+                            <span class="metric-value">${claudeSessionsData.total_sessions.toLocaleString()}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Tool Calls</span>
+                            <span class="metric-value">${claudeSessionsData.total_tool_calls.toLocaleString()}</span>
+                        </div>
+                        <div class="metric">
                             <span class="metric-label">Recent (${currentTimeRange}h)</span>
-                            <span class="metric-value">${data.claude_api_usage.recent_requests.toLocaleString()}</span>
+                            <span class="metric-value">${data.claude_api_usage.recent_requests.toLocaleString()} requests</span>
                         </div>
                         <div class="metric">
                             <span class="metric-label">Recent Cost</span>
@@ -591,25 +642,35 @@
                         ${renderRecentErrors(data.system_health.recent_errors)}
                     </div>
                 </div>
+
+                <div class="card" style="grid-column: 1 / -1;">
+                    <div class="card-header">
+                        <div class="card-icon icon-tasks">🔄</div>
+                        <h2 class="card-title">Live Activity Feed</h2>
+                    </div>
+                    <div class="error-list" style="max-height: 400px;">
+                        ${renderActivityFeed(activityData)}
+                    </div>
+                </div>
             `;
         }
 
-        function renderUsageApiModels(models) {
-            if (!models || Object.keys(models).length === 0) {
-                return '';
+        function renderSessionsBreakdown(sessions) {
+            if (!sessions || sessions.length === 0) {
+                return '<div class="no-data" style="margin-top: 1rem;">No sessions yet</div>';
             }
 
             return `
                 <div class="model-breakdown">
-                    ${Object.entries(models).map(([model, stats]) => `
+                    ${sessions.slice(0, 5).map(session => `
                         <div class="model-item">
                             <div class="model-header">
-                                <span class="model-name">${model}</span>
+                                <span class="model-name">${session.session_id.substring(0, 8)}...</span>
+                                <span class="model-cost">${session.total_tools} tools</span>
                             </div>
                             <div class="model-details">
-                                <div>${(stats.input_tokens / 1000).toFixed(0)}K in</div>
-                                <div>${(stats.output_tokens / 1000).toFixed(0)}K out</div>
-                                ${stats.cached_tokens > 0 ? `<div>${(stats.cached_tokens / 1000).toFixed(0)}K cached</div>` : ''}
+                                <div>${session.blocked} blocked</div>
+                                <div>${session.errors} errors</div>
                             </div>
                         </div>
                     `).join('')}
@@ -671,62 +732,77 @@
             `).join('');
         }
 
-        function startAutoRefresh() {
-            if (!autoRefreshEnabled) return;
-
-            // Clear any existing intervals
-            if (refreshInterval) clearInterval(refreshInterval);
-            if (countdownInterval) clearInterval(countdownInterval);
-
-            // Set next refresh time
-            nextRefreshTime = Date.now() + REFRESH_INTERVAL_MS;
-
-            // Start refresh interval
-            refreshInterval = setInterval(() => {
-                loadMetrics();
-                nextRefreshTime = Date.now() + REFRESH_INTERVAL_MS;
-            }, REFRESH_INTERVAL_MS);
-
-            // Start countdown display
-            updateCountdown();
-            countdownInterval = setInterval(updateCountdown, 1000);
-        }
-
-        function stopAutoRefresh() {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-                refreshInterval = null;
+        function renderActivityFeed(activityData) {
+            if (!activityData || !activityData.activity || activityData.activity.length === 0) {
+                return '<div class="no-data">No activity yet</div>';
             }
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-                countdownInterval = null;
+
+            function getStatusIcon(status) {
+                const icons = {
+                    'in_progress': '▶️',
+                    'completed': '✅',
+                    'failed': '❌',
+                    'pending': '🔄',
+                    'stopped': '⏸️'
+                };
+                return icons[status] || '•';
             }
-            document.getElementById('refreshCountdown').textContent = '--';
+
+            function getRelativeTime(timestamp) {
+                const now = new Date();
+                const then = new Date(timestamp);
+                const diffMs = now - then;
+                const diffSecs = Math.floor(diffMs / 1000);
+                const diffMins = Math.floor(diffSecs / 60);
+                const diffHours = Math.floor(diffMins / 60);
+                const diffDays = Math.floor(diffHours / 24);
+
+                if (diffSecs < 60) return `${diffSecs}s ago`;
+                if (diffMins < 60) return `${diffMins}m ago`;
+                if (diffHours < 24) return `${diffHours}h ago`;
+                return `${diffDays}d ago`;
+            }
+
+            return activityData.activity.map(activity => `
+                <div class="tool-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: flex-start;">
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                <span style="font-size: 0.875rem;">${getStatusIcon(activity.status)}</span>
+                                <span class="tool-name" style="font-size: 0.875rem;">Task #${activity.task_id}</span>
+                                <span class="tool-stats">${activity.description}</span>
+                            </div>
+                            <div class="tool-stats" style="margin-left: 1.75rem;">${activity.message}</div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem;">
+                            <span class="tool-stats" style="white-space: nowrap;">${getRelativeTime(activity.timestamp)}</span>
+                            ${activity.output_lines ? `<span class="tool-stats" style="color: var(--accent-green);">${activity.output_lines} lines</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
         }
 
         function toggleAutoRefresh() {
             autoRefreshEnabled = document.getElementById('autoRefreshToggle').checked;
 
             if (autoRefreshEnabled) {
-                startAutoRefresh();
+                startRealtimeUpdates();
             } else {
-                stopAutoRefresh();
+                stopRealtimeUpdates();
             }
         }
 
-        function updateCountdown() {
-            if (!autoRefreshEnabled || !nextRefreshTime) return;
-
-            const remaining = Math.max(0, Math.ceil((nextRefreshTime - Date.now()) / 1000));
-            document.getElementById('refreshCountdown').textContent = `${remaining}s`;
+        function refreshData() {
+            // Manually restart the connection to force an update
+            stopRealtimeUpdates();
+            startRealtimeUpdates();
         }
 
-        function refreshData() {
-            loadMetrics();
-            // Reset countdown after manual refresh
-            if (autoRefreshEnabled) {
-                nextRefreshTime = Date.now() + REFRESH_INTERVAL_MS;
-                updateCountdown();
+        function updateConnectionStatus(status) {
+            const countdownEl = document.getElementById('refreshCountdown');
+            if (countdownEl) {
+                countdownEl.textContent = status;
             }
         }
 

@@ -39,16 +39,44 @@ class Task:
     updated_at: str
     model: str  # 'haiku', 'sonnet'
     workspace: str  # Repository/workspace path
+    worker_type: str = "code_worker"  # 'code_worker', 'frontend_worker', 'research_worker', etc.
     result: str | None = None
     error: str | None = None
     pid: int | None = None  # Process ID for running tasks
+    activity_log: list[dict] | None = None  # Activity/progress log with timestamps
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Task":
+        # Ensure activity_log exists (for backwards compatibility)
+        if "activity_log" not in data:
+            data["activity_log"] = []
+        # Ensure worker_type exists (for backwards compatibility with old tasks)
+        if "worker_type" not in data:
+            data["worker_type"] = "code_worker"
         return cls(**data)
+
+    def add_activity(self, message: str, output_lines: int | None = None):
+        """Add activity entry to log"""
+        if self.activity_log is None:
+            self.activity_log = []
+
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "message": message,
+        }
+        if output_lines is not None:
+            entry["output_lines"] = output_lines
+
+        self.activity_log.append(entry)
+
+    def get_latest_activity(self, limit: int = 5) -> list[dict]:
+        """Get latest activity entries"""
+        if not self.activity_log:
+            return []
+        return self.activity_log[-limit:]
 
 
 class TaskManager:
@@ -110,7 +138,9 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error saving tasks: {e}")
 
-    def create_task(self, user_id: int, description: str, workspace: str, model: str = "sonnet") -> Task:
+    def create_task(
+        self, user_id: int, description: str, workspace: str, model: str = "sonnet", worker_type: str = "code_worker"
+    ) -> Task:
         """Create a new task"""
         now = datetime.now().isoformat()
         task_id = str(uuid.uuid4())[:6]
@@ -124,12 +154,13 @@ class TaskManager:
             updated_at=now,
             model=model,
             workspace=workspace,
+            worker_type=worker_type,
         )
 
         self.tasks[task_id] = task
         self._save_tasks()
 
-        logger.info(f"Created task {task_id} for user {user_id} in {workspace}: {description}")
+        logger.info(f"Created {worker_type} task {task_id} for user {user_id} in {workspace}: {description}")
         return task
 
     def update_task(
@@ -160,6 +191,21 @@ class TaskManager:
         self._save_tasks()
 
         logger.info(f"Updated task {task_id}: status={status}, pid={pid}")
+
+    def log_activity(self, task_id: str, message: str, output_lines: int | None = None, save: bool = True):
+        """Log activity for a task"""
+        if task_id not in self.tasks:
+            logger.error(f"Task {task_id} not found")
+            return
+
+        task = self.tasks[task_id]
+        task.add_activity(message, output_lines)
+        task.updated_at = datetime.now().isoformat()
+
+        if save:
+            self._save_tasks()
+
+        logger.debug(f"Task {task_id} activity: {message}")
 
     def get_task(self, task_id: str) -> Task | None:
         """Get task by ID"""
@@ -206,6 +252,7 @@ class TaskManager:
             description=original_task.description,
             workspace=original_task.workspace,
             model=original_task.model,
+            worker_type=original_task.worker_type,
         )
 
         logger.info(f"Created retry task {new_task.task_id} for {original_task.status} task {task_id}")
@@ -308,6 +355,45 @@ class TaskManager:
 
         return stopped_tasks[:limit]
 
+    def cleanup_stale_pending_tasks(self, max_age_hours: int = 1) -> int:
+        """
+        Clean up stale pending tasks that have been waiting too long.
+        Marks them as failed to prevent cluttering the active tasks list.
+
+        Args:
+            max_age_hours: Maximum age in hours before a pending task is considered stale
+
+        Returns:
+            Number of tasks cleaned up
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        cutoff_time = now - timedelta(hours=max_age_hours)
+        cleaned_count = 0
+
+        for task in self.tasks.values():
+            if task.status == "pending":
+                try:
+                    task_time = datetime.fromisoformat(task.created_at)
+                    if task_time < cutoff_time:
+                        task.status = "failed"
+                        task.error = (
+                            f"Task was pending for more than {max_age_hours}h without being picked up by worker"
+                        )
+                        task.updated_at = now.isoformat()
+                        cleaned_count += 1
+                        logger.info(f"Cleaned up stale pending task {task.task_id}: {task.description[:50]}")
+                except ValueError:
+                    logger.warning(f"Could not parse timestamp for task {task.task_id}: {task.created_at}")
+                    continue
+
+        if cleaned_count > 0:
+            self._save_tasks()
+            logger.info(f"Cleaned up {cleaned_count} stale pending tasks")
+
+        return cleaned_count
+
     def stop_task(self, task_id: str) -> tuple[bool, str]:
         """
         Stop a running task by killing its process.
@@ -356,11 +442,17 @@ class TaskManager:
         new_tasks = []
 
         for stopped_task in stopped_tasks:
+            # Skip repetitive/test tasks that shouldn't be auto-retried
+            if any(skip_pattern in stopped_task.description for skip_pattern in ["Find todos", "test", "Test"]):
+                logger.info(f"Skipping auto-retry of task {stopped_task.task_id}: {stopped_task.description[:50]}")
+                continue
+
             new_task = self.create_task(
                 user_id=stopped_task.user_id,
                 description=stopped_task.description,
                 workspace=stopped_task.workspace,
                 model=stopped_task.model,
+                worker_type=stopped_task.worker_type,
             )
             new_tasks.append(new_task)
             logger.info(f"Auto-retrying stopped task {stopped_task.task_id} as {new_task.task_id}")

@@ -219,15 +219,51 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
 
+    # Clean up stale pending tasks (older than 1 hour) to prevent clutter
+    task_manager.cleanup_stale_pending_tasks(max_age_hours=1)
+
     # Clean up old failed tasks (older than 24 hours) to prevent clutter
     task_manager.clear_old_failed_tasks(user_id, older_than_hours=24)
 
     # Get active tasks only
     active_tasks = task_manager.get_active_tasks(user_id)
 
-    # Get failed tasks from recent activity
-    recent_tasks = task_manager.get_user_tasks(user_id, limit=10)
-    failed_tasks = [t for t in recent_tasks if t.status == "failed"][:3]
+    # Get recent failed tasks (last 1 hour only, exclude repetitive failures)
+    from datetime import datetime, timedelta
+
+    recent_tasks = task_manager.get_user_tasks(user_id, limit=50)
+    now = datetime.now()
+    one_hour_ago = now - timedelta(hours=1)
+
+    failed_tasks = []
+    seen_errors = set()
+    for task in recent_tasks:
+        if task.status != "failed":
+            continue
+
+        # Only show failures from last hour
+        try:
+            task_time = datetime.fromisoformat(task.created_at)
+            if task_time < one_hour_ago:
+                continue
+        except ValueError:
+            # Skip tasks with invalid timestamp format
+            continue
+
+        # Skip repetitive "Find todos" failures
+        if "Find todos" in task.description:
+            continue
+
+        # Skip if we've seen this exact error before
+        error_key = (task.description[:50], task.error[:100] if task.error else "")
+        if error_key in seen_errors:
+            continue
+
+        seen_errors.add(error_key)
+        failed_tasks.append(task)
+
+        if len(failed_tasks) >= 3:
+            break
 
     # Build compact status message (plain text - formatter will convert to HTML)
     message_parts = ["Status\n"]
@@ -238,6 +274,30 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for task in active_tasks[:5]:  # Show up to 5 active tasks
             status_icon = "🔄" if task.status == "pending" else "▶️"
             message_parts.append(f"{status_icon} #{task.task_id} {task.description[:50]}")
+
+            # Show latest activity if available
+            latest_activity = task.get_latest_activity(limit=1)
+            if latest_activity:
+                activity = latest_activity[0]
+                # Parse timestamp to show relative time
+                from datetime import datetime
+
+                try:
+                    activity_time = datetime.fromisoformat(activity["timestamp"])
+                    now = datetime.now()
+                    elapsed = (now - activity_time).total_seconds()
+
+                    if elapsed < 60:
+                        time_str = f"{int(elapsed)}s ago"
+                    elif elapsed < 3600:
+                        time_str = f"{int(elapsed / 60)}m ago"
+                    else:
+                        time_str = f"{int(elapsed / 3600)}h ago"
+
+                    message_parts.append(f"   └─ {activity['message'][:60]} ({time_str})")
+                except Exception:
+                    message_parts.append(f"   └─ {activity['message'][:60]}")
+
         message_parts.append("")
 
     # Failed tasks - only show if there are any
@@ -531,21 +591,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Exiting for restart...")
         import os
 
-        # Kill monitoring server before restarting bot
-        try:
-            # Find and kill monitoring server process
-            result = subprocess.run(["pgrep", "-f", "monitoring_server.py"], capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                pids = result.stdout.strip().split("\n")
-                for pid in pids:
-                    try:
-                        subprocess.run(["kill", pid], check=False)
-                        logger.info(f"Killed monitoring server PID {pid}")
-                    except Exception as e:
-                        logger.warning(f"Failed to kill monitoring server PID {pid}: {e}")
-        except Exception as e:
-            logger.warning(f"Error stopping monitoring server: {e}")
-
+        # Monitoring server runs independently via launchd, will auto-restart
         # Flush logs before exit
         for handler in logging.root.handlers:
             handler.flush()
@@ -659,6 +705,48 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             task_manager.update_task(task.task_id, pid=pid)
             logger.info(f"Task {task.task_id} process started with PID {pid}")
 
+        # Define progress callback to log activity and send minimal updates
+        last_user_update = [0]  # Track when we last notified the user
+        update_count = [0]  # Count total updates
+
+        def send_progress_update(status_message: str, elapsed_seconds: int):
+            """Called periodically with progress updates"""
+            import time
+
+            # Always log activity to task manager for visibility in status/dashboard
+            # Extract output line count if present in message
+            output_lines = None
+            if "output lines" in status_message:
+                import re
+
+                match = re.search(r"(\d+) output lines", status_message)
+                if match:
+                    output_lines = int(match.group(1))
+
+            # Log to task manager (stored for status queries and dashboard)
+            task_manager.log_activity(task.task_id, status_message, output_lines, save=True)
+
+            update_count[0] += 1
+            current_time = time.time()
+
+            # Send minimal updates to user (every 60 seconds, not 30)
+            # Keep user informed but not spammed
+            if current_time - last_user_update[0] >= 60:
+                last_user_update[0] = current_time
+
+                # Send brief update to user
+                try:
+                    # Simple message: just the elapsed time
+                    if elapsed_seconds < 120:
+                        user_msg = f"Task #{task.task_id} working... ({elapsed_seconds}s)"
+                    else:
+                        mins = elapsed_seconds // 60
+                        user_msg = f"Task #{task.task_id} working... ({mins}m)"
+
+                    asyncio.create_task(send_formatted_response(context, user_id, user_msg))
+                except Exception as e:
+                    logger.error(f"Error sending user update: {e}")
+
         # Execute using Claude session pool with bot context
         success, result, pid = await claude_pool.execute_task(
             task_id=task.task_id,
@@ -666,7 +754,10 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             workspace=Path(task.workspace),
             bot_repo_path=BOT_REPOSITORY,  # Always provide bot context
             model=task.model,
+            agent=task.worker_type,  # Use worker_type as agent name (e.g., 'frontend_worker', 'code_worker')
             pid_callback=save_pid_immediately,  # Save PID immediately when process starts
+            progress_callback=send_progress_update,  # Send periodic progress updates to user
+            heartbeat_interval=30,  # Send update every 30 seconds
         )
 
         # Update task with result
@@ -832,13 +923,16 @@ async def process_message_async(
         if background_task_info:
             task_desc = background_task_info["description"]
             user_message = background_task_info["user_message"]
+            worker_type = background_task_info.get("worker_type", "code_worker")  # Default to code_worker
 
             # Create background task
             workspace = current_workspace or WORKSPACE_PATH
-            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
+            task = task_manager.create_task(
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type=worker_type
+            )
 
             # Submit task to worker pool (non-blocking)
-            logger.info(f"Submitted task {task.task_id} to worker pool")
+            logger.info(f"Submitted {worker_type} task {task.task_id} to worker pool")
             await worker_pool.submit(execute_code_task, task, update, context)
 
             # Send user-facing message
@@ -1006,9 +1100,12 @@ async def process_document_async(
         if background_task_info:
             task_desc = background_task_info["description"]
             user_message = background_task_info["user_message"]
+            worker_type = background_task_info.get("worker_type", "code_worker")
             workspace = current_workspace or WORKSPACE_PATH
-            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
-            logger.info(f"Submitted task {task.task_id} to worker pool (document)")
+            task = task_manager.create_task(
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type=worker_type
+            )
+            logger.info(f"Submitted {worker_type} task {task.task_id} to worker pool (document)")
             await worker_pool.submit(execute_code_task, task, update, context)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
@@ -1151,9 +1248,12 @@ async def process_photo_async(
         if background_task_info:
             task_desc = background_task_info["description"]
             user_message = background_task_info["user_message"]
+            worker_type = background_task_info.get("worker_type", "code_worker")
             workspace = current_workspace or WORKSPACE_PATH
-            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
-            logger.info(f"Submitted task {task.task_id} to worker pool (photo)")
+            task = task_manager.create_task(
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type=worker_type
+            )
+            logger.info(f"Submitted {worker_type} task {task.task_id} to worker pool (photo)")
             await worker_pool.submit(execute_code_task, task, update, context)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
@@ -1288,9 +1388,12 @@ async def process_voice_async(
         if background_task_info:
             task_desc = background_task_info["description"]
             user_message = background_task_info["user_message"]
+            worker_type = background_task_info.get("worker_type", "code_worker")
             workspace = current_workspace or WORKSPACE_PATH
-            task = task_manager.create_task(user_id=user_id, description=task_desc, workspace=workspace, model="sonnet")
-            logger.info(f"Submitted task {task.task_id} to worker pool (voice)")
+            task = task_manager.create_task(
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type=worker_type
+            )
+            logger.info(f"Submitted {worker_type} task {task.task_id} to worker pool (voice)")
             await worker_pool.submit(execute_code_task, task, update, context)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
@@ -1377,10 +1480,16 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
-    """Periodic task to cleanup stale sessions"""
-    count = session_manager.cleanup_stale_sessions()
-    if count > 0:
-        logger.info(f"Cleanup task: removed {count} stale sessions")
+    """Periodic task to cleanup stale sessions and tasks"""
+    # Clean up stale sessions
+    session_count = session_manager.cleanup_stale_sessions()
+    if session_count > 0:
+        logger.info(f"Cleanup task: removed {session_count} stale sessions")
+
+    # Clean up stale pending tasks (older than 1 hour)
+    task_count = task_manager.cleanup_stale_pending_tasks(max_age_hours=1)
+    if task_count > 0:
+        logger.info(f"Cleanup task: marked {task_count} stale pending tasks as failed")
 
 
 async def log_issue_notification(issue, should_escalate: bool):

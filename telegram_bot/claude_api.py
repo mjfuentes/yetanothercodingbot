@@ -92,7 +92,22 @@ When user says "check logs", "show logs", or "?":
 
 BACKGROUND_TASK FORMAT (for coding work):
 Return this EXACT format (pipe-delimited, single line, NO code blocks, NO extra explanation):
+
+Default format (uses code_worker):
 BACKGROUND_TASK|<task_description>|<user_message>
+
+With specific worker:
+BACKGROUND_TASK|<worker_type>|<task_description>|<user_message>
+
+Available workers:
+- code_worker (default): Backend code, scripts, APIs, general coding
+- frontend_worker: Web UI/UX, HTML/CSS/JS, design implementation, websites
+
+Use frontend_worker when request involves:
+- "website", "web page", "landing page", "portfolio", "UI", "UX"
+- "design", "styling", "layout", "responsive", "HTML", "CSS", "JavaScript"
+- "gallery", "navigation", "header", "footer", "button", "form"
+- Design inspiration ("like this site", "copy this design")
 
 IMPORTANT:
 - Do NOT wrap in markdown code blocks (no ```)
@@ -102,13 +117,13 @@ IMPORTANT:
 
 Examples:
 - User: "fix bug in main.py" → BACKGROUND_TASK|Fix bug in main.py|Fixing the bug.
+- User: "build a landing page" → BACKGROUND_TASK|frontend_worker|Build landing page|Creating a responsive landing page.
+- User: "update the website gallery" → BACKGROUND_TASK|frontend_worker|Update website gallery|Updating gallery layout.
 - User: "fix the error" → BACKGROUND_TASK|Fix the error in the codebase|Fixing it.
-- User: "fix error" → BACKGROUND_TASK|Fix error in the codebase|Fixing it.
 - User: "check code for improvements" → BACKGROUND_TASK|Analyze codebase for improvements|Scanning the code.
 - User: "look at the logs" (with "logs" in query) → Answer directly with log analysis
 - User: "what is asyncio?" → Answer directly (general knowledge)
 - User: "show me the main.py file" → BACKGROUND_TASK|Show contents of main.py|Reading the file.
-- User: "how does the bot work?" → BACKGROUND_TASK|Explain bot architecture from code|Analyzing the code.
 
 CRITICAL RULES:
 - ❌ NEVER attempt to read/modify files yourself (you can't - you're using API, not CLI)
@@ -253,15 +268,28 @@ User query: {user_query}"""
 
             if task_line:
                 # Parse the BACKGROUND_TASK line
-                parts = task_line.split("|", 2)
-                if len(parts) == 3:
-                    _, task_description, user_message = parts
+                # Supports two formats:
+                # 1. BACKGROUND_TASK|task_description|user_message (default: code_worker)
+                # 2. BACKGROUND_TASK|worker_type|task_description|user_message (specify worker)
+                parts = task_line.split("|")
+
+                if len(parts) == 4:
+                    # New format with worker type specified
+                    _, worker_type, task_description, user_message = parts
                     background_task = {
+                        "worker_type": worker_type.strip(),
                         "description": task_description.strip(),
                         "user_message": user_message.strip(),
                     }
-
-                    # Return just the BACKGROUND_TASK line (we'll send task start message in main.py)
+                    return task_line, background_task, usage_info
+                elif len(parts) == 3:
+                    # Legacy format - defaults to code_worker
+                    _, task_description, user_message = parts
+                    background_task = {
+                        "worker_type": "code_worker",  # Default worker
+                        "description": task_description.strip(),
+                        "user_message": user_message.strip(),
+                    }
                     return task_line, background_task, usage_info
 
         # Direct answer

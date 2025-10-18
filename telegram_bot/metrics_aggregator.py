@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from cost_tracker import CostTracker
+from hooks_reader import HooksReader
 from tasks import TaskManager
 from tool_usage_tracker import ToolUsageTracker
 
@@ -38,10 +39,12 @@ class MetricsAggregator:
         cost_tracker: CostTracker,
         task_manager: TaskManager,
         tool_usage_tracker: ToolUsageTracker,
+        hooks_reader: HooksReader | None = None,
     ):
         self.cost_tracker = cost_tracker
         self.task_manager = task_manager
         self.tool_usage_tracker = tool_usage_tracker
+        self.hooks_reader = hooks_reader
 
         logger.info("MetricsAggregator initialized")
 
@@ -146,11 +149,41 @@ class MetricsAggregator:
         }
 
     def get_tool_usage_metrics(self, hours: int = 24) -> dict[str, Any]:
-        """Get tool usage statistics"""
+        """Get tool usage statistics from Claude Code hooks"""
+        # Use hooks data if available
+        if self.hooks_reader:
+            hooks_stats = self.hooks_reader.get_aggregate_statistics(hours=hours)
+
+            # Convert to expected format
+            tools_breakdown = hooks_stats["tools_by_type"]
+            most_used = sorted(
+                [
+                    {
+                        "tool": k,
+                        "count": v,
+                        "success_rate": 1.0,  # Hooks don't track success rate per tool
+                        "avg_duration_ms": 0.0,
+                    }
+                    for k, v in tools_breakdown.items()
+                ],
+                key=lambda x: x["count"],
+                reverse=True,
+            )[:10]
+
+            status_summary = self.tool_usage_tracker.get_agent_status_summary()
+
+            return {
+                "time_window_hours": hours,
+                "total_tool_calls": hooks_stats["total_tool_calls"],
+                "tools_breakdown": tools_breakdown,
+                "most_used_tools": most_used,
+                "agent_status": status_summary,
+            }
+
+        # Fallback to old tracker (mostly empty)
         tool_stats = self.tool_usage_tracker.get_tool_statistics(hours=hours)
         status_summary = self.tool_usage_tracker.get_agent_status_summary()
 
-        # Calculate most used tools
         tools_by_usage = sorted(
             tool_stats.get("tools", {}).items(),
             key=lambda x: x[1]["count"],
@@ -164,7 +197,7 @@ class MetricsAggregator:
                 "success_rate": stats.get("success_rate", 0.0),
                 "avg_duration_ms": stats.get("avg_duration_ms", 0.0),
             }
-            for tool, stats in tools_by_usage[:10]  # Top 10 tools
+            for tool, stats in tools_by_usage[:10]
         ]
 
         return {
