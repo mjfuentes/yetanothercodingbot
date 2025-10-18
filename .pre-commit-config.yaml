@@ -100,6 +100,15 @@ repos:
         pass_filenames: false
         stages: [commit]
 
+      # Test frontend_worker agent configuration
+      - id: test-frontend-worker
+        name: Test frontend_worker agent
+        entry: bash -c 'echo "Testing frontend_worker agent..."; output=$(claude chat --agents frontend_worker --model haiku --permission-mode bypassPermissions <<< "List all MCP tools (start with mcp__). Respond with count only." 2>&1); if echo "$output" | grep -q "mcp__chrome-devtools"; then echo "✓ frontend_worker has Chrome DevTools MCP access"; else echo "✗ frontend_worker missing Chrome DevTools MCP"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        files: '^\.claude/agents/frontend_worker\.md$'
+        always_run: false
+
       # Enforce workflow documentation
       - id: workflow-check
         name: Workflow enforcement reminder

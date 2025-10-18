@@ -8,6 +8,7 @@ Enhanced with tool usage tracking via hooks
 import asyncio
 import logging
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -29,9 +30,11 @@ class ClaudeInteractiveSession:
         model: str = "sonnet",
         enforce_workflow: bool = True,
         usage_tracker: ToolUsageTracker | None = None,
+        agent: str | None = None,
     ):
         self.workspace = workspace
         self.model = model
+        self.agent = agent
         self.process: subprocess.Popen | None = None
         self.task_id: str | None = None
         self.enforce_workflow = enforce_workflow
@@ -57,9 +60,15 @@ class ClaudeInteractiveSession:
                 "bypassPermissions",  # Auto-approve file operations
             ]
 
+            # Add agent flag if specified
+            if self.agent:
+                cmd.extend(["--agents", self.agent])
+
             logger.info(f"Starting Claude interactive session for task {task_id}")
             logger.info(f"Command: {' '.join(cmd)}")
             logger.info(f"Workspace: {self.workspace}")
+            if self.agent:
+                logger.info(f"Agent: {self.agent}")
 
             self.process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -91,8 +100,18 @@ class ClaudeInteractiveSession:
 
             return False
 
-    async def send_message(self, message: str) -> str | None:
-        """Send message to Claude and get response
+    async def send_message_with_streaming(
+        self,
+        message: str,
+        progress_callback: Callable[[str, int], None] | None = None,
+        heartbeat_interval: int = 30,
+    ) -> str | None:
+        """Send message to Claude and get response with streaming updates
+
+        Args:
+            message: The message to send to Claude
+            progress_callback: Optional callback for progress updates. Called with (status_message, elapsed_seconds)
+            heartbeat_interval: Send heartbeat updates every N seconds (default: 30)
 
         Note: This closes stdin after sending the message, which causes the claude chat
         process to execute and exit. This is intentional for background task execution.
@@ -109,27 +128,80 @@ class ClaudeInteractiveSession:
             await self.process.stdin.wait_closed()  # Wait for stdin to actually close
             logger.debug(f"Sent message to Claude and closed stdin (task {self.task_id})")
 
-            # Wait for process to complete
-            stdout, stderr = await self.process.communicate()
+            # Stream output with periodic updates
+            start_time = time.time()
+            last_heartbeat = start_time
+            stdout_chunks = []
+            stderr_chunks = []
 
-            response = stdout.decode().strip()
+            async def read_stream(stream, chunks, stream_name):
+                """Read from stream line by line"""
+                while True:
+                    try:
+                        line = await stream.readline()
+                        if not line:
+                            break
+                        decoded = line.decode()
+                        chunks.append(decoded)
+                        logger.debug(f"Claude {stream_name} (task {self.task_id}): {decoded.rstrip()}")
+                    except Exception as e:
+                        logger.error(f"Error reading {stream_name}: {e}")
+                        break
 
-            if stderr:
-                error_msg = stderr.decode().strip()
-                if error_msg:
-                    logger.debug(f"Claude stderr (task {self.task_id}): {error_msg}")
+            # Start reading both streams
+            stdout_task = asyncio.create_task(read_stream(self.process.stdout, stdout_chunks, "stdout"))
+            stderr_task = asyncio.create_task(read_stream(self.process.stderr, stderr_chunks, "stderr"))
+
+            # Monitor progress while streams are being read
+            while not stdout_task.done() or not stderr_task.done():
+                await asyncio.sleep(1)
+
+                elapsed = int(time.time() - start_time)
+                time_since_heartbeat = time.time() - last_heartbeat
+
+                # Send periodic heartbeat updates
+                if progress_callback and time_since_heartbeat >= heartbeat_interval:
+                    output_so_far = len(stdout_chunks)
+                    if output_so_far > 0:
+                        progress_callback(f"Still working... ({output_so_far} output lines, {elapsed}s)", elapsed)
+                    else:
+                        progress_callback(f"Still working... (no output yet, {elapsed}s)", elapsed)
+                    last_heartbeat = time.time()
+
+            # Wait for both streams to finish
+            await asyncio.gather(stdout_task, stderr_task)
+
+            # Wait for process to exit
+            await self.process.wait()
+
+            # Combine output
+            response = "".join(stdout_chunks).strip()
+            stderr_output = "".join(stderr_chunks).strip()
+
+            elapsed = int(time.time() - start_time)
+
+            if stderr_output:
+                logger.debug(f"Claude stderr (task {self.task_id}): {stderr_output}")
 
             if response:
-                logger.debug(f"Received response from Claude (task {self.task_id}): {len(response)} chars")
+                logger.info(f"Received response from Claude (task {self.task_id}): {len(response)} chars in {elapsed}s")
+                if progress_callback:
+                    progress_callback(f"Completed in {elapsed}s", elapsed)
                 return response
             else:
-                logger.warning(f"Empty response from Claude (task {self.task_id})")
+                logger.warning(f"Empty response from Claude (task {self.task_id}) after {elapsed}s")
+                if progress_callback:
+                    progress_callback(f"Warning: Empty response after {elapsed}s", elapsed)
                 return None
 
         except Exception as e:
             logger.error(f"Error sending message (task {self.task_id}): {e}")
             await self.terminate()
             return None
+
+    async def send_message(self, message: str) -> str | None:
+        """Send message to Claude and get response (backward compatible version without streaming)"""
+        return await self.send_message_with_streaming(message, progress_callback=None)
 
     async def terminate(self):
         """Terminate the session"""
@@ -246,13 +318,20 @@ class ClaudeSessionPool:
         workspace: Path,
         bot_repo_path: str | None = None,
         model: str = "sonnet",
+        agent: str | None = None,
         pid_callback: Callable[[int], None] | None = None,
+        progress_callback: Callable[[str, int], None] | None = None,
+        heartbeat_interval: int = 30,
     ) -> tuple[bool, str, int | None]:
         """Execute a task using session pool
 
         Args:
+            agent: Optional agent name to use (e.g., 'frontend_worker', 'code_worker')
             pid_callback: Optional callback function called with PID when process starts
                          Format: pid_callback(pid: int)
+            progress_callback: Optional callback for progress updates
+                              Format: progress_callback(status_message: str, elapsed_seconds: int)
+            heartbeat_interval: Send heartbeat updates every N seconds (default: 30)
 
         Returns:
             (success, result, pid) - pid is the Claude process ID if available
@@ -264,7 +343,7 @@ class ClaudeSessionPool:
 
         # Create session with specified workspace, workflow enforcement, and usage tracker
         session = ClaudeInteractiveSession(
-            workspace, model, enforce_workflow=self.enforce_workflow, usage_tracker=self.usage_tracker
+            workspace, model, enforce_workflow=self.enforce_workflow, usage_tracker=self.usage_tracker, agent=agent
         )
         session.task_id = task_id
         self.active_sessions[task_id] = session
@@ -315,14 +394,29 @@ You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
 
 Complete the task and provide a concise summary of what you did."""
 
-            # Execute task
-            response = await session.send_message(prompt)
+            # Execute task with streaming and progress updates
+            response = await session.send_message_with_streaming(
+                prompt, progress_callback=progress_callback, heartbeat_interval=heartbeat_interval
+            )
 
             # Cleanup
             await session.terminate()
 
+            # Check for empty or invalid response
             if not response:
-                return False, "No response from Claude", pid
+                error_msg = "Claude produced no output. The task may have failed silently or timed out."
+                logger.error(f"Task {task_id}: {error_msg}")
+                if self.usage_tracker:
+                    self.usage_tracker.record_status_change(task_id, "failed", error_msg)
+                return False, error_msg, pid
+
+            # Check if response is essentially empty (just whitespace or minimal content)
+            if len(response.strip()) < 10:
+                error_msg = f"Claude produced minimal output ({len(response)} chars): {response[:100]}"
+                logger.warning(f"Task {task_id}: {error_msg}")
+                if self.usage_tracker:
+                    self.usage_tracker.record_status_change(task_id, "failed", "Minimal/empty output")
+                return False, error_msg, pid
 
             # Enforce workflow if enabled
             workflow_result = ""
