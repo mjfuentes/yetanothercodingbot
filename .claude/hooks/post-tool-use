@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Post-tool-use hook for tracking Claude Code tool results
+# Writes to both JSONL logs AND database files
+
+set +e  # Don't exit on error - hooks should be resilient
+
+# Read input once
+INPUT_JSON=$(cat)
+
+# Export for Python to access
+export INPUT_JSON
+
+# Process the hook data and update databases
+python3 << 'PYTHON_EOF'
+import json
+import sys
+import os
+from datetime import datetime
+from pathlib import Path
+import fcntl
+
+def safe_file_write(filepath, update_func):
+    """Safely update JSON file with file locking"""
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create file if it doesn't exist
+    if not filepath.exists():
+        if filepath.name.endswith('.json'):
+            filepath.write_text('[]')
+        else:
+            filepath.write_text('{}')
+
+    try:
+        with open(filepath, 'r+') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                data = json.load(f)
+                data = update_func(data)
+                f.seek(0)
+                f.truncate()
+                json.dump(data, f, indent=2)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return True
+    except Exception as e:
+        return False
+
+try:
+    input_data = json.loads(os.environ.get('INPUT_JSON', '{}'))
+
+    # Extract data - prioritize env SESSION_ID (set by bot) over JSON session_id (set by Claude)
+    session_id = os.environ.get('SESSION_ID', input_data.get('session_id', 'unknown'))
+    task_id = session_id  # Use session_id as task_id
+    tool_name = input_data.get('tool_name', 'unknown')
+    tool_response = input_data.get('tool_response', {})
+    tool_output = str(tool_response)
+    has_error = 'error' in tool_output.lower() if tool_output else False
+
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+    # Build log entry
+    log_entry = {
+        'timestamp': timestamp,
+        'tool': tool_name,
+        'output_length': len(tool_output),
+        'has_error': has_error
+    }
+
+    # Determine base directories
+    # Priority: absolute path > current working dir
+    data_dir = None
+    log_dir = None
+
+    for base in [
+        Path('/Users/matifuentes/Workspace/agentlab'),  # Project root (highest priority)
+        Path.cwd().parent if Path.cwd().name == 'telegram_bot' else Path.cwd(),  # Handle telegram_bot subdir
+        Path('/Users/matifuentes/Workspace/agentlab/telegram_bot')
+    ]:
+        if (base / 'data').exists():
+            data_dir = base / 'data'
+            break
+
+    for base in [
+        Path.cwd() / 'logs',
+        Path('/Users/matifuentes/Workspace/agentlab/logs'),
+        Path('/Users/matifuentes/Workspace/agentlab/telegram_bot/logs')
+    ]:
+        if base.exists():
+            log_dir = base / 'sessions' / session_id
+            break
+
+    if not log_dir:
+        log_dir = Path('/tmp/claude-sessions') / session_id
+
+    # 1. Write to JSONL log file
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / 'post_tool_use.jsonl'
+    try:
+        with open(log_file, 'a') as f:
+            json.dump(log_entry, f)
+            f.write('\n')
+    except:
+        pass
+
+    # 2. Update tool_usage.json database
+    if data_dir:
+        tool_usage_file = data_dir / 'tool_usage.json'
+
+        def update_tool_usage(data):
+            record = {
+                'timestamp': timestamp,
+                'task_id': task_id,
+                'tool_name': tool_name,
+                'duration_ms': None,
+                'success': not has_error,
+                'error': None if not has_error else 'Tool output contains error',
+                'parameters': None
+            }
+            data.append(record)
+            return data[-10000:]
+
+        safe_file_write(tool_usage_file, update_tool_usage)
+
+    # 3. Update agent_status.json database
+    if data_dir:
+        status_file = data_dir / 'agent_status.json'
+
+        def update_agent_status(data):
+            record = {
+                'timestamp': timestamp,
+                'task_id': task_id,
+                'status': 'tool_call',
+                'message': '{} completed'.format(tool_name),
+                'metadata': {
+                    'tool': tool_name,
+                    'success': not has_error
+                }
+            }
+            data.append(record)
+            return data[-10000:]
+
+        safe_file_write(status_file, update_agent_status)
+
+    # 4. Update task activity_log in tasks.json
+    if data_dir:
+        tasks_file = data_dir / 'tasks.json'
+
+        def update_task_activity(data):
+            if task_id in data:
+                if 'activity_log' not in data[task_id]:
+                    data[task_id]['activity_log'] = []
+
+                activity_entry = {
+                    'timestamp': timestamp,
+                    'message': '{} tool used'.format(tool_name),
+                    'tool': tool_name,
+                    'success': not has_error
+                }
+
+                data[task_id]['activity_log'].append(activity_entry)
+                data[task_id]['updated_at'] = timestamp
+
+            return data
+
+        safe_file_write(tasks_file, update_task_activity)
+
+except Exception as e:
+    import traceback
+    with open('/tmp/post-tool-use-errors.log', 'a') as f:
+        f.write(f'\n=== Error at {datetime.utcnow()} ===\n')
+        f.write(traceback.format_exc())
+        f.write('\n')
+
+PYTHON_EOF
+
+exit 0

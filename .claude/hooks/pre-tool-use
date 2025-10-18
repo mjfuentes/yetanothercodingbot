@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Pre-tool-use hook for tracking Claude Code tool invocations
+
+set +e  # Don't exit on error - hooks should be resilient
+
+# DEBUG: Log that hook was triggered
+echo "[DEBUG] Hook triggered at $(date)" >> /tmp/hook_debug.log
+
+# Parse input JSON safely
+INPUT=$(cat)
+
+# DEBUG: Log input
+echo "[DEBUG] Input: $INPUT" >> /tmp/hook_debug.log
+
+# Extract data from JSON and build log entry
+LOG_DATA=$(echo "$INPUT" | python3 -c "
+import json, sys, os
+from datetime import datetime
+try:
+    data = json.load(sys.stdin)
+    # Use SESSION_ID environment variable if set, otherwise use session_id from JSON
+    session_id = os.environ.get('SESSION_ID') or data.get('session_id', 'unknown')
+    tool_name = data.get('tool_name', 'unknown')
+    tool_input = data.get('tool_input', {})
+
+    # Return session_id and log entry
+    log = {
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'tool': tool_name,
+        'parameters': tool_input,
+        'status': 'starting'
+    }
+    print(json.dumps({'session_id': session_id, 'log': log}))
+except Exception as e:
+    print(json.dumps({
+        'session_id': os.environ.get('SESSION_ID', 'unknown'),
+        'log': {
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'tool': 'unknown',
+            'status': 'error',
+            'error': str(e)
+        }
+    }))
+" 2>/dev/null)
+
+SESSION_ID_RESOLVED=$(echo "$LOG_DATA" | python3 -c "import json, sys; print(json.load(sys.stdin).get('session_id', 'unknown'))" 2>/dev/null)
+LOG_ENTRY=$(echo "$LOG_DATA" | python3 -c "import json, sys; print(json.dumps(json.load(sys.stdin).get('log', {})))" 2>/dev/null)
+
+# Determine log directory
+# Try multiple locations: PWD, Telegram bot workspace, fallback to temp
+if [ -d "$PWD/logs" ]; then
+    LOG_DIR="$PWD/logs/sessions/$SESSION_ID_RESOLVED"
+elif [ -d "/Users/matifuentes/Workspace/agentlab/logs" ]; then
+    LOG_DIR="/Users/matifuentes/Workspace/agentlab/logs/sessions/$SESSION_ID_RESOLVED"
+elif [ -d "/Users/matifuentes/Workspace/agentlab/telegram_bot/logs" ]; then
+    LOG_DIR="/Users/matifuentes/Workspace/agentlab/telegram_bot/logs/sessions/$SESSION_ID_RESOLVED"
+else
+    # Fallback to temp if no logs directory found
+    LOG_DIR="/tmp/claude-sessions/$SESSION_ID_RESOLVED"
+fi
+
+# Create log directory (fail silently if unable)
+mkdir -p "$LOG_DIR" 2>/dev/null || exit 0
+
+# Log file
+LOG_FILE="$LOG_DIR/pre_tool_use.jsonl"
+
+# Append to log file (fail silently)
+if [ -n "$LOG_ENTRY" ]; then
+    echo "$LOG_ENTRY" >> "$LOG_FILE" 2>/dev/null
+fi
+
+exit 0
