@@ -3,6 +3,10 @@
 
 set -e  # Exit on error
 
+# Get script directory and change to project root
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR/.."
+
 echo "🚀 Setting up Telegram bot with launchd..."
 
 # Check if bot runs manually first
@@ -33,7 +37,7 @@ mkdir -p ~/Library/LaunchAgents
 
 # Copy plist
 echo "📋 Installing service..."
-cp com.agentlab.telegrambot.plist ~/Library/LaunchAgents/
+cp config/com.agentlab.telegrambot.plist ~/Library/LaunchAgents/
 chmod 644 ~/Library/LaunchAgents/com.agentlab.telegrambot.plist
 
 echo "✅ Service installed"
