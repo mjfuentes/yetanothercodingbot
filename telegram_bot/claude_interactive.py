@@ -19,6 +19,73 @@ from workflow_enforcer import WorkflowEnforcer
 logger = logging.getLogger(__name__)
 
 
+class PromptBuilder:
+    """
+    Reusable prompt engineering components for Claude interactions
+    Optimized with XML structure for clarity and token efficiency
+    """
+
+    @staticmethod
+    def build_bot_context(bot_repo_path: str) -> str:
+        """Build context about the bot's codebase with XML structure"""
+        return f"""<bot_context>
+You are a Telegram bot powered by Claude Code. When users say "you", "your code", or "the bot", they mean YOUR codebase.
+
+<structure>
+Location: {bot_repo_path}
+telegram_bot/main.py - Entry point, handlers, routing
+telegram_bot/session.py - Session & history mgmt
+telegram_bot/tasks.py - Background task tracking
+telegram_bot/claude_interactive.py - YOU are invoked from here
+data/ - Persistent storage (sessions, tasks)
+logs/ - Application logs
+</structure>
+
+Use NLU to determine: user's own code vs. modifying bot code.
+</bot_context>"""
+
+    @staticmethod
+    def build_task_prompt(
+        task_description: str,
+        workspace: str | Path,
+        bot_context: str = "",
+        workflow_context: str = "",
+    ) -> str:
+        """
+        Build complete task execution prompt with XML structure
+        Optimized for token efficiency and clarity
+        """
+        parts = []
+
+        # Add bot context (already XML-formatted)
+        if bot_context:
+            parts.append(bot_context)
+            parts.append("")
+
+        # User request (XML tag)
+        parts.append(f"<request>{task_description}</request>")
+        parts.append("")
+
+        # Environment info (XML structure)
+        parts.append("<environment>")
+        parts.append(f"working_directory: {workspace}")
+        parts.append("tools_available: Read, Write, Edit, Glob, Grep, Bash")
+        parts.append("</environment>")
+        parts.append("")
+
+        # Workflow context if provided
+        if workflow_context:
+            parts.append(workflow_context)
+            parts.append("")
+
+        # Completion instructions (XML tag for clarity)
+        parts.append("<instructions>")
+        parts.append("Complete the task and provide a concise summary.")
+        parts.append("</instructions>")
+
+        return "\n".join(parts)
+
+
 class ClaudeInteractiveSession:
     """
     Interactive Claude Code session with full tool access
@@ -223,39 +290,21 @@ class ClaudeInteractiveSession:
             if not await self.start(self.task_id or "unknown"):
                 return False, "Failed to start Claude session"
 
-            # Build context about bot's location
-            bot_context = ""
-            if bot_repo_path:
-                bot_context = f"""
-CONTEXT: You are a Telegram bot powered by Claude Code. When users say "you", "your code", or "the bot", they're referring to your own codebase.
+            # Build bot context if needed
+            bot_context = PromptBuilder.build_bot_context(bot_repo_path) if bot_repo_path else ""
 
-Your code lives at: {bot_repo_path}
-Structure:
-- telegram_bot/main.py - Bot entry point, message handlers, routing logic
-- telegram_bot/session.py - Session & conversation history management
-- telegram_bot/tasks.py - Background task tracking system
-- telegram_bot/claude_interactive.py - Interactive Claude sessions (YOU are being invoked from here!)
-- data/ - Persistent storage (sessions.json, tasks.json)
-- logs/ - Application logs
-
-Use your natural language understanding to determine if the user wants you to modify your own code or work on a different project."""
-
-            # Add workflow enforcement context
+            # Get workflow enforcement context if enabled
             workflow_context = ""
             if self.enforce_workflow and self.workflow_enforcer:
                 workflow_context = self.workflow_enforcer.get_workflow_prompt_context()
 
-            # Send task with clear instructions
-            prompt = f"""{bot_context}
-
-User request: {task_description}
-
-Working directory: {self.workspace}
-You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
-
-{workflow_context}
-
-Complete the task and provide a concise summary of what you did."""
+            # Build and send prompt
+            prompt = PromptBuilder.build_task_prompt(
+                task_description=task_description,
+                workspace=self.workspace,
+                bot_context=bot_context,
+                workflow_context=workflow_context,
+            )
 
             # Execute
             response = await self.send_message(prompt)
@@ -348,37 +397,20 @@ class ClaudeSessionPool:
                     logger.error(f"Error in PID callback: {e}")
 
             # Build context and execute task
-            bot_context = ""
-            if bot_repo_path:
-                bot_context = f"""
-CONTEXT: You are a Telegram bot powered by Claude Code. When users say "you", "your code", or "the bot", they're referring to your own codebase.
+            bot_context = PromptBuilder.build_bot_context(bot_repo_path) if bot_repo_path else ""
 
-Your code lives at: {bot_repo_path}
-Structure:
-- telegram_bot/main.py - Bot entry point, message handlers, routing logic
-- telegram_bot/session.py - Session & conversation history management
-- telegram_bot/tasks.py - Background task tracking system
-- telegram_bot/claude_interactive.py - Interactive Claude sessions (YOU are being invoked from here!)
-- data/ - Persistent storage (sessions.json, tasks.json)
-- logs/ - Application logs
-
-Use your natural language understanding to determine if the user wants you to modify your own code or work on a different project."""
-
-            # Add workflow enforcement context
+            # Get workflow enforcement context if enabled
             workflow_context = ""
             if self.enforce_workflow and session.workflow_enforcer:
                 workflow_context = session.workflow_enforcer.get_workflow_prompt_context()
 
-            prompt = f"""{bot_context}
-
-User request: {description}
-
-Working directory: {workspace}
-You have full access to tools (Read, Write, Edit, Glob, Grep, Bash, etc.).
-
-{workflow_context}
-
-Complete the task and provide a concise summary of what you did."""
+            # Build prompt using PromptBuilder
+            prompt = PromptBuilder.build_task_prompt(
+                task_description=description,
+                workspace=workspace,
+                bot_context=bot_context,
+                workflow_context=workflow_context,
+            )
 
             # Execute task with streaming and progress updates
             response = await session.send_message_with_streaming(prompt, progress_callback=progress_callback)
