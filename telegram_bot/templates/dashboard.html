@@ -102,41 +102,6 @@
             align-items: center;
         }
 
-        .theme-toggle {
-            margin-left: auto;
-            background: var(--bg-secondary);
-            border: 1.5px solid var(--border-color);
-            border-radius: 1rem;
-            padding: 0.375rem;
-            display: flex;
-            gap: 0.25rem;
-            box-shadow: 0 1px 3px var(--shadow);
-        }
-
-        .theme-toggle-btn {
-            background: transparent;
-            border: none;
-            padding: 0.5rem 0.75rem;
-            border-radius: 0.75rem;
-            cursor: pointer;
-            transition: all var(--transition);
-            font-size: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 0.375rem;
-            color: var(--text-secondary);
-        }
-
-        .theme-toggle-btn:hover {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        .theme-toggle-btn.active {
-            background: linear-gradient(135deg, var(--accent-primary) 0%, #c96d4e 100%);
-            color: white;
-            box-shadow: 0 2px 4px var(--shadow-medium);
-        }
 
         .btn {
             background: var(--bg-secondary);
@@ -737,15 +702,6 @@
             <button class="btn" onclick="setTimeRange(168)">7 Days</button>
             <button class="btn" onclick="setTimeRange(720)">30 Days</button>
             <button class="btn" onclick="manualRefresh()" title="Refresh now">🔄 Refresh</button>
-
-            <div class="theme-toggle">
-                <button class="theme-toggle-btn active" onclick="setTheme('light')" id="lightThemeBtn" title="Light theme">
-                    ☀️
-                </button>
-                <button class="theme-toggle-btn" onclick="setTheme('dark')" id="darkThemeBtn" title="Dark theme">
-                    🌙
-                </button>
-            </div>
         </div>
 
         <div class="auto-refresh-status" id="autoRefreshStatus">
@@ -895,52 +851,11 @@
         let connectionStateChangeCallbacks = [];
 
         document.addEventListener('DOMContentLoaded', () => {
-            // Initialize theme from localStorage or system preference
-            initializeTheme();
+            // Force dark theme
+            document.documentElement.setAttribute('data-theme', 'dark');
             startRealtimeUpdates();
             startConnectionMonitor();
         });
-
-        function initializeTheme() {
-            // Check localStorage first
-            const savedTheme = localStorage.getItem('dashboard-theme');
-
-            if (savedTheme) {
-                applyTheme(savedTheme);
-            } else {
-                // Check system preference
-                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                applyTheme(prefersDark ? 'dark' : 'light');
-            }
-
-            // Listen for system theme changes
-            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-                if (!localStorage.getItem('dashboard-theme')) {
-                    applyTheme(e.matches ? 'dark' : 'light');
-                }
-            });
-        }
-
-        function setTheme(theme) {
-            localStorage.setItem('dashboard-theme', theme);
-            applyTheme(theme);
-        }
-
-        function applyTheme(theme) {
-            const html = document.documentElement;
-            const lightBtn = document.getElementById('lightThemeBtn');
-            const darkBtn = document.getElementById('darkThemeBtn');
-
-            if (theme === 'dark') {
-                html.setAttribute('data-theme', 'dark');
-                lightBtn.classList.remove('active');
-                darkBtn.classList.add('active');
-            } else {
-                html.removeAttribute('data-theme');
-                lightBtn.classList.add('active');
-                darkBtn.classList.remove('active');
-            }
-        }
 
         function setTimeRange(hours) {
             currentTimeRange = hours;
