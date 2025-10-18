@@ -1188,23 +1188,42 @@
                 return;
             }
 
-            const toolsArray = Object.entries(session.summary.tools_by_type)
+            let html = '';
+
+            // Show worker delegation chain if available
+            if (toolData.worker_chain && toolData.worker_chain.length > 0) {
+                html += '<h4 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary);">Worker Delegation</h4>';
+                html += '<div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">';
+                html += '<span style="padding: 0.25rem 0.75rem; background: var(--accent-blue); color: white; border-radius: 0.25rem; font-size: 0.875rem;">orchestrator</span>';
+
+                toolData.worker_chain.forEach(worker => {
+                    html += '<span style="color: var(--text-secondary);">→</span>';
+                    html += `<span style="padding: 0.25rem 0.75rem; background: var(--accent-purple); color: white; border-radius: 0.25rem; font-size: 0.875rem;" title="${escapeHtml(worker.description)}">${escapeHtml(worker.worker)}</span>`;
+                });
+
+                html += '</div>';
+            }
+
+            // Show tool usage statistics
+            const toolsArray = Object.entries(toolData.summary.tools_by_type)
                 .map(([tool, count]) => ({ tool, count }))
                 .sort((a, b) => b.count - a.count);
 
             if (toolsArray.length === 0) {
-                container.innerHTML = '<div class="no-data">No tools used yet</div>';
-                return;
+                html += '<div class="no-data">No tools used yet</div>';
+            } else {
+                html += '<h4 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary);">Tool Usage</h4>';
+                html += toolsArray.map(item => `
+                    <div class="tool-item">
+                        <div>
+                            <div class="tool-name">${escapeHtml(item.tool)}</div>
+                        </div>
+                        <div class="tool-count">${item.count}</div>
+                    </div>
+                `).join('');
             }
 
-            container.innerHTML = toolsArray.map(item => `
-                <div class="tool-item">
-                    <div>
-                        <div class="tool-name">${escapeHtml(item.tool)}</div>
-                    </div>
-                    <div class="tool-count">${item.count}</div>
-                </div>
-            `).join('');
+            container.innerHTML = html;
         }
 
         function closeTaskModal() {
