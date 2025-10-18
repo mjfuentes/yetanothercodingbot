@@ -6,41 +6,41 @@
     <title>YetAnotherCodingBot Monitoring Dashboard</title>
     <style>
         :root {
-            /* Claude.ai warm color palette (light mode) */
-            --bg-primary: #f5f1eb;
-            --bg-secondary: #fffef9;
-            --bg-tertiary: #faf8f3;
-            --text-primary: #3d3025;
-            --text-secondary: #6b5a47;
-            --text-muted: #9d8c7a;
-            --accent-primary: #da7756;
-            --accent-blue: #6b8cc7;
-            --accent-green: #6daa7b;
-            --accent-red: #d96b5a;
-            --accent-yellow: #e8a354;
-            --accent-purple: #9d7cb3;
-            --border-color: #e5dfd5;
-            --shadow: rgba(61, 48, 37, 0.08);
-            --shadow-medium: rgba(61, 48, 37, 0.12);
-            --shadow-strong: rgba(61, 48, 37, 0.18);
+            /* Grayscale color palette (light mode) */
+            --bg-primary: #f5f5f5;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #fafafa;
+            --text-primary: #1a1a1a;
+            --text-secondary: #4a4a4a;
+            --text-muted: #8a8a8a;
+            --accent-primary: #4a4a4a;
+            --accent-blue: #6a6a6a;
+            --accent-green: #5a5a5a;
+            --accent-red: #3a3a3a;
+            --accent-yellow: #7a7a7a;
+            --accent-purple: #5a5a5a;
+            --border-color: #e0e0e0;
+            --shadow: rgba(0, 0, 0, 0.08);
+            --shadow-medium: rgba(0, 0, 0, 0.12);
+            --shadow-strong: rgba(0, 0, 0, 0.18);
             --transition: 0.2s ease;
         }
 
-        /* Claude.ai dark theme */
+        /* Grayscale dark theme */
         [data-theme="dark"] {
-            --bg-primary: #1a1614;
-            --bg-secondary: #242220;
-            --bg-tertiary: #2d2a27;
-            --text-primary: #e8e3db;
-            --text-secondary: #b8b0a4;
-            --text-muted: #7d7669;
-            --accent-primary: #e8876f;
-            --accent-blue: #83a1d4;
-            --accent-green: #8bc09a;
-            --accent-red: #e88278;
-            --accent-yellow: #f0b76b;
-            --accent-purple: #b393c9;
-            --border-color: #3a3633;
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #242424;
+            --bg-tertiary: #2d2d2d;
+            --text-primary: #e8e8e8;
+            --text-secondary: #b8b8b8;
+            --text-muted: #7d7d7d;
+            --accent-primary: #b8b8b8;
+            --accent-blue: #a8a8a8;
+            --accent-green: #9a9a9a;
+            --accent-red: #888888;
+            --accent-yellow: #c0c0c0;
+            --accent-purple: #b0b0b0;
+            --border-color: #3a3a3a;
             --shadow: rgba(0, 0, 0, 0.3);
             --shadow-medium: rgba(0, 0, 0, 0.4);
             --shadow-strong: rgba(0, 0, 0, 0.5);
@@ -127,7 +127,7 @@
         }
 
         .btn.active {
-            background: linear-gradient(135deg, var(--accent-primary) 0%, #c96d4e 100%);
+            background: linear-gradient(135deg, var(--accent-primary) 0%, #3a3a3a 100%);
             border-color: var(--accent-primary);
             color: white;
             box-shadow: 0 3px 8px var(--shadow-medium);
@@ -261,7 +261,7 @@
         }
 
         .section-badge {
-            background: linear-gradient(135deg, var(--accent-primary) 0%, #c96d4e 100%);
+            background: linear-gradient(135deg, var(--accent-primary) 0%, #3a3a3a 100%);
             color: white;
             padding: 0.25rem 0.75rem;
             border-radius: 1rem;
@@ -270,11 +270,11 @@
         }
 
         .section-badge.error {
-            background: linear-gradient(135deg, var(--accent-red) 0%, #c95a4b 100%);
+            background: linear-gradient(135deg, var(--accent-red) 0%, #2a2a2a 100%);
         }
 
         .section-badge.success {
-            background: linear-gradient(135deg, var(--accent-green) 0%, #5c9a6a 100%);
+            background: linear-gradient(135deg, var(--accent-green) 0%, #4a4a4a 100%);
         }
 
         /* Task Filters */
