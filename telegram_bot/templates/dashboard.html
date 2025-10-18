@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Monitoring Dashboard</title>
+    <title>YetAnotherCodingBot Monitoring Dashboard</title>
     <style>
         :root {
             /* Claude.ai warm color palette (light mode) */
@@ -69,22 +69,21 @@
         header {
             margin-bottom: 2rem;
             position: relative;
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
         }
 
-        header::before {
-            content: "✦";
-            position: absolute;
-            left: -2rem;
-            top: 0;
-            font-size: 1.5rem;
-            color: var(--accent-primary);
-            opacity: 0.6;
+        .logo {
+            width: 80px;
+            height: 80px;
+            flex-shrink: 0;
         }
 
         h1 {
             font-size: 1.75rem;
             font-weight: 600;
-            margin-bottom: 0.25rem;
+            margin-bottom: 0;
             letter-spacing: -0.025em;
             color: var(--text-primary);
         }
@@ -761,8 +760,10 @@
 <body>
     <div class="container">
         <header>
-            <h1>Bot Monitoring Dashboard</h1>
-            <p class="subtitle">Real-time task monitoring and system health</p>
+            <img src="data:image/png;base64,{{ logo_base64 }}" alt="YetAnotherCodingBot" class="logo">
+            <div>
+                <h1>YetAnotherCodingBot</h1>
+            </div>
         </header>
 
         <div class="controls">

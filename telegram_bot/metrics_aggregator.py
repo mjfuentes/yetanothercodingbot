@@ -321,14 +321,13 @@ class MetricsAggregator:
                     elif task.status == "failed":
                         buckets[bucket_index]["tasks_failed"] += 1
 
-        # Add tool usage data
+        # Add tool usage data (count all tool records, not just those with duration)
         for record in self.tool_usage_tracker.tool_records:
-            if record.duration_ms is not None:  # Only completed tool calls
-                record_time = datetime.fromisoformat(record.timestamp)
-                if record_time >= cutoff_time:
-                    bucket_index = int((record_time - cutoff_time).total_seconds() / (interval_minutes * 60))
-                    if 0 <= bucket_index < len(buckets):
-                        buckets[bucket_index]["tool_calls"] += 1
+            record_time = datetime.fromisoformat(record.timestamp)
+            if record_time >= cutoff_time:
+                bucket_index = int((record_time - cutoff_time).total_seconds() / (interval_minutes * 60))
+                if 0 <= bucket_index < len(buckets):
+                    buckets[bucket_index]["tool_calls"] += 1
 
         return {
             "time_window_hours": hours,

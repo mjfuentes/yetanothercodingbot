@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -272,15 +272,14 @@ class ToolUsageTracker:
         Returns:
             Dictionary with statistics
         """
-        cutoff_time = datetime.now() - timedelta(hours=hours)
+
+        cutoff_time = datetime.now(UTC) - timedelta(hours=hours)
 
         # Filter records
         records = [
             r
             for r in self.tool_records
-            if (task_id is None or r.task_id == task_id)
-            and r.duration_ms is not None
-            and datetime.fromisoformat(r.timestamp) >= cutoff_time
+            if (task_id is None or r.task_id == task_id) and datetime.fromisoformat(r.timestamp) >= cutoff_time
         ]
 
         if not records:
@@ -311,7 +310,7 @@ class ToolUsageTracker:
             elif record.success is False:
                 stats["failures"] += 1
 
-            if record.duration_ms:
+            if record.duration_ms is not None:
                 stats["total_duration_ms"] += record.duration_ms
                 stats["min_duration_ms"] = min(stats["min_duration_ms"], record.duration_ms)
                 stats["max_duration_ms"] = max(stats["max_duration_ms"], record.duration_ms)
@@ -319,7 +318,11 @@ class ToolUsageTracker:
         # Calculate averages and success rates
         for _tool, stats in tool_stats.items():
             if stats["count"] > 0:
-                stats["avg_duration_ms"] = stats["total_duration_ms"] / stats["count"]
+                # Only calculate avg duration if we have duration data
+                if stats["total_duration_ms"] > 0:
+                    stats["avg_duration_ms"] = stats["total_duration_ms"] / stats["count"]
+                else:
+                    stats["avg_duration_ms"] = 0.0
                 stats["success_rate"] = stats["successes"] / stats["count"] if stats["count"] > 0 else 0.0
 
         return {

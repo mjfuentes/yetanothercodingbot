@@ -57,7 +57,18 @@ last_metrics_snapshot = None
 @app.route("/")
 def index():
     """Serve the main dashboard"""
-    return render_template("dashboard.html")
+    import base64
+    import os
+
+    # Load logo image and convert to base64
+    logo_path = os.path.join(os.path.dirname(__file__), "static", "logo.png")
+    logo_base64 = ""
+
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+    return render_template("dashboard.html", logo_base64=logo_base64)
 
 
 @app.route("/api/metrics/overview")
@@ -159,12 +170,12 @@ def task_tool_usage(task_id):
                                 blocked_count += 1
                 summary["blocked_operations"] = blocked_count
 
-        # Read pre_tool_use for detailed tool calls (including Task tool for worker delegation)
+        # Read post_tool_use for detailed tool calls
         tool_calls = []
         worker_chain = []
 
-        if pre_tool_file.exists():
-            with open(pre_tool_file) as f:
+        if post_tool_file.exists():
+            with open(post_tool_file) as f:
                 for line in f:
                     if line.strip():
                         entry = json.loads(line)
@@ -172,17 +183,14 @@ def task_tool_usage(task_id):
 
                         # Track worker spawning (Task tool calls)
                         if entry.get("tool") == "Task":
-                            params = entry.get("parameters", {})
-                            subagent_type = params.get("subagent_type")
-                            description = params.get("description", "")
-                            if subagent_type:
-                                worker_chain.append(
-                                    {
-                                        "worker": subagent_type,
-                                        "description": description,
-                                        "timestamp": entry.get("timestamp"),
-                                    }
-                                )
+                            # Note: parameters not available in post_tool_use hook
+                            worker_chain.append(
+                                {
+                                    "worker": "unknown",
+                                    "description": "Task agent spawned",
+                                    "timestamp": entry.get("timestamp"),
+                                }
+                            )
 
         return jsonify(
             {
@@ -589,7 +597,7 @@ def health_check():
     return jsonify(
         {
             "status": "healthy",
-            "service": "bot-monitoring",
+            "service": "YetAnotherCodingBot-monitoring",
             "version": "1.0.0",
         }
     )
