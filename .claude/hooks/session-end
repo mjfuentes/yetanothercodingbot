@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Session-end hook for generating summary
+# Called when Claude session completes
+
+set +e  # Don't exit on error
+
+# Parse input to get session_id
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | python3 -c "import json, sys; print(json.load(sys.stdin).get('session_id', 'unknown'))" 2>/dev/null)
+
+# Determine log directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOG_DIR="$SCRIPT_DIR/logs/sessions/$SESSION_ID"
+
+# Only generate summary if logs exist
+if [ ! -d "$LOG_DIR" ]; then
+    exit 0
+fi
+
+PRE_LOG="$LOG_DIR/pre_tool_use.jsonl"
+POST_LOG="$LOG_DIR/post_tool_use.jsonl"
+SUMMARY_FILE="$LOG_DIR/summary.json"
+
+# Generate summary from logs
+python3 -c "
+import json
+from collections import defaultdict
+
+try:
+    # Read post-tool logs
+    tools_by_type = defaultdict(int)
+    total_tools = 0
+    tools_with_errors = 0
+
+    try:
+        with open('$POST_LOG', 'r') as f:
+            for line in f:
+                if line.strip():
+                    data = json.loads(line)
+                    tool = data.get('tool', 'unknown')
+                    tools_by_type[tool] += 1
+                    total_tools += 1
+                    if data.get('has_error', False):
+                        tools_with_errors += 1
+    except FileNotFoundError:
+        pass
+
+    # Read pre-tool logs for blocked operations
+    blocked_operations = 0
+    try:
+        with open('$PRE_LOG', 'r') as f:
+            for line in f:
+                if line.strip():
+                    data = json.loads(line)
+                    if data.get('status') == 'blocked':
+                        blocked_operations += 1
+    except FileNotFoundError:
+        pass
+
+    # Write summary
+    summary = {
+        'task_id': '$SESSION_ID',
+        'total_tools_used': total_tools,
+        'tools_by_type': dict(tools_by_type),
+        'blocked_operations': blocked_operations,
+        'tools_with_errors': tools_with_errors
+    }
+
+    with open('$SUMMARY_FILE', 'w') as f:
+        json.dump(summary, f, indent=2)
+
+except Exception as e:
+    # Silently fail - don't break session completion
+    pass
+" 2>/dev/null
+
+exit 0

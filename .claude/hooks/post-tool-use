@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Post-tool-use hook for tracking Claude Code tool results
+# Called after each tool completes
+
+set +e  # Don't exit on error - hooks should be resilient
+
+# Parse input JSON safely
+INPUT=$(cat)
+
+# Extract data from JSON and build log entry
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+LOG_DATA=$(echo "$INPUT" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    session_id = data.get('session_id', 'unknown')
+    tool_name = data.get('tool_name', 'unknown')
+    tool_output = data.get('tool_output', '')
+    has_error = 'error' in str(tool_output).lower() if tool_output else False
+
+    log = {
+        'timestamp': '$TIMESTAMP',
+        'tool': tool_name,
+        'output_length': len(str(tool_output)) if tool_output else 0,
+        'has_error': has_error
+    }
+    print(json.dumps({'session_id': session_id, 'log': log}))
+except Exception as e:
+    print(json.dumps({
+        'session_id': 'unknown',
+        'log': {
+            'timestamp': '$TIMESTAMP',
+            'tool': 'unknown',
+            'status': 'error',
+            'error': str(e)
+        }
+    }))
+" 2>/dev/null)
+
+SESSION_ID=$(echo "$LOG_DATA" | python3 -c "import json, sys; print(json.load(sys.stdin).get('session_id', 'unknown'))" 2>/dev/null)
+LOG_ENTRY=$(echo "$LOG_DATA" | python3 -c "import json, sys; print(json.dumps(json.load(sys.stdin).get('log', {})))" 2>/dev/null)
+
+# Determine log directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOG_DIR="$SCRIPT_DIR/logs/sessions/$SESSION_ID"
+
+# Create log directory (fail silently if unable)
+mkdir -p "$LOG_DIR" 2>/dev/null || exit 0
+
+# Log file
+LOG_FILE="$LOG_DIR/post_tool_use.jsonl"
+
+# Append to log file (fail silently)
+if [ -n "$LOG_ENTRY" ]; then
+    echo "$LOG_ENTRY" >> "$LOG_FILE" 2>/dev/null
+fi
+
+# Always exit 0 - hook errors should not block tool execution
+exit 0
