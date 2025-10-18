@@ -79,13 +79,13 @@ async def invoke_orchestrator(
     # Get active tasks info if task_manager provided
     active_tasks_info = []
     if task_manager:
-        # Get user's active tasks (pending or in_progress)
+        # Get user's active tasks (pending or running)
         # For now, get all active tasks - orchestrator will filter by context
         all_tasks = task_manager.tasks.values()
         active_tasks_info = [
             {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
             for t in all_tasks
-            if t.status in ["pending", "in_progress"]
+            if t.status in ["pending", "running"]
         ]
 
     # Build context for orchestrator

@@ -3,11 +3,14 @@ Interactive Claude Code session handler
 Phase 3-4: Full tool access for code operations
 Enhanced with workflow enforcement for testing and commits
 Enhanced with tool usage tracking via hooks
+Enhanced with security: prompt injection prevention and input sanitization
 """
 
 import asyncio
+import html
 import logging
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -19,6 +22,77 @@ from workflow_enforcer import WorkflowEnforcer
 logger = logging.getLogger(__name__)
 
 
+def sanitize_prompt_content(text: str) -> str:
+    """
+    Sanitize text for safe inclusion in prompts sent to Claude Code CLI.
+    Prevents prompt injection via special characters and control sequences.
+
+    Args:
+        text: Raw user input or untrusted content
+
+    Returns:
+        Escaped text safe for prompt inclusion
+    """
+    if not text:
+        return ""
+
+    # HTML escape XML special characters
+    escaped = html.escape(text, quote=True)
+
+    # Remove control characters that could break prompt structure
+    escaped = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]", "", escaped)
+
+    # Check for and remove potential injection patterns
+    dangerous_patterns = [
+        r"</\w+>",  # Closing XML tags
+        r"<\w+[^>]*>",  # Opening XML tags
+        r"<bot_context>",  # Structural tags
+        r"<request>",
+        r"<environment>",
+        r"<instructions>",
+    ]
+
+    for pattern in dangerous_patterns:
+        if re.search(pattern, escaped, re.IGNORECASE):
+            escaped = re.sub(pattern, "", escaped, flags=re.IGNORECASE)
+            logger.warning(f"Removed dangerous pattern from prompt: {pattern}")
+
+    return escaped
+
+
+def validate_task_description(description: str) -> tuple[bool, str | None]:
+    """
+    Validate task description for security issues.
+
+    Args:
+        description: Task description to validate
+
+    Returns:
+        (is_valid, error_message) - False if invalid with error message
+    """
+    if not description or not description.strip():
+        return False, "Empty task description"
+
+    # Check length
+    if len(description) > 5000:
+        return False, "Task description too long (max 5000 characters)"
+
+    # Check for injection patterns
+    injection_patterns = [
+        (r"ignore (all |previous )?instructions?", "Instruction override attempt"),
+        (r"system:?\s*", "System prompt manipulation"),
+        (r"<\|im_start\|>", "Prompt format injection"),
+    ]
+
+    desc_lower = description.lower()
+    for pattern, reason in injection_patterns:
+        if re.search(pattern, desc_lower):
+            logger.warning(f"Task validation failed: {reason} in: {description[:100]}")
+            return False, f"Invalid task description: {reason}"
+
+    return True, None
+
+
 class PromptBuilder:
     """
     Reusable prompt engineering components for Claude interactions
@@ -28,11 +102,14 @@ class PromptBuilder:
     @staticmethod
     def build_bot_context(bot_repo_path: str) -> str:
         """Build context about the bot's codebase with XML structure"""
+        # Security: Sanitize bot repo path
+        safe_path = sanitize_prompt_content(bot_repo_path)
+
         return f"""<bot_context>
 You are a Telegram bot powered by Claude Code. When users say "you", "your code", or "the bot", they mean YOUR codebase.
 
 <structure>
-Location: {bot_repo_path}
+Location: {safe_path}
 telegram_bot/main.py - Entry point, handlers, routing
 telegram_bot/session.py - Session & history mgmt
 telegram_bot/tasks.py - Background task tracking
@@ -54,26 +131,37 @@ Use NLU to determine: user's own code vs. modifying bot code.
         """
         Build complete task execution prompt with XML structure
         Optimized for token efficiency and clarity
+        Security: Sanitizes all user inputs before inclusion
         """
+        # Security: Validate and sanitize task description
+        is_valid, error_msg = validate_task_description(task_description)
+        if not is_valid:
+            logger.error(f"Invalid task description: {error_msg}")
+            # Return safe error message - don't expose validation details
+            task_description = "Invalid task description provided"
+
+        safe_task = sanitize_prompt_content(task_description)
+        safe_workspace = sanitize_prompt_content(str(workspace))
+
         parts = []
 
-        # Add bot context (already XML-formatted)
+        # Add bot context (already XML-formatted and sanitized)
         if bot_context:
             parts.append(bot_context)
             parts.append("")
 
-        # User request (XML tag)
-        parts.append(f"<request>{task_description}</request>")
+        # User request (XML tag) - sanitized
+        parts.append(f"<request>{safe_task}</request>")
         parts.append("")
 
-        # Environment info (XML structure)
+        # Environment info (XML structure) - sanitized
         parts.append("<environment>")
-        parts.append(f"working_directory: {workspace}")
+        parts.append(f"working_directory: {safe_workspace}")
         parts.append("tools_available: Read, Write, Edit, Glob, Grep, Bash")
         parts.append("</environment>")
         parts.append("")
 
-        # Workflow context if provided
+        # Workflow context if provided (trusted internal content)
         if workflow_context:
             parts.append(workflow_context)
             parts.append("")

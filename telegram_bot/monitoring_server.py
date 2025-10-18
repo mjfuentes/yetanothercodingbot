@@ -347,10 +347,10 @@ def running_tasks():
         # Reload tasks from disk to get latest state
         task_manager.reload_tasks()
 
-        # Get tasks with status 'in_progress' or 'pending'
+        # Get tasks with status 'running' or 'pending'
         running = []
         for task in task_manager.tasks.values():
-            if task.status in ["in_progress", "pending"]:
+            if task.status in ["running", "pending"]:
                 # Get latest activity message
                 latest_activity = None
                 if task.activity_log and len(task.activity_log) > 0:

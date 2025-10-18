@@ -34,7 +34,7 @@ class Task:
     task_id: str
     user_id: int
     description: str
-    status: str  # 'pending', 'in_progress', 'completed', 'failed', 'stopped'
+    status: str  # 'pending', 'running', 'completed', 'failed', 'stopped'
     created_at: str
     updated_at: str
     model: str  # 'haiku', 'sonnet'
@@ -106,11 +106,11 @@ class TaskManager:
 
             logger.info(f"Loaded {len(self.tasks)} tasks from disk")
 
-            # Check in_progress tasks - mark as stopped if process died
-            in_progress_tasks = [task for task in self.tasks.values() if task.status == "in_progress"]
+            # Check running tasks - mark as stopped if process died
+            running_tasks = [task for task in self.tasks.values() if task.status == "running"]
 
-            if in_progress_tasks:
-                for task in in_progress_tasks:
+            if running_tasks:
+                for task in running_tasks:
                     if task.pid and is_process_alive(task.pid):
                         # Task survived restart! Process still running
                         logger.info(f"Task {task.task_id} (PID {task.pid}) still running after restart")
@@ -244,11 +244,9 @@ class TaskManager:
         return user_tasks[:limit]
 
     def get_active_tasks(self, user_id: int) -> list[Task]:
-        """Get active (pending/in_progress) tasks for user"""
+        """Get active (pending/running) tasks for user"""
         return [
-            task
-            for task in self.tasks.values()
-            if task.user_id == user_id and task.status in ["pending", "in_progress"]
+            task for task in self.tasks.values() if task.user_id == user_id and task.status in ["pending", "running"]
         ]
 
     def retry_task(self, task_id: str) -> Task | None:
@@ -329,9 +327,9 @@ class TaskManager:
 
         return cleared_count
 
-    def mark_all_in_progress_as_stopped(self):
+    def mark_all_running_as_stopped(self):
         """
-        Mark all in-progress tasks as stopped during shutdown.
+        Mark all running tasks as stopped during shutdown.
         This preserves task state so they can be retried on restart.
 
         Returns:
@@ -340,7 +338,7 @@ class TaskManager:
         stopped_count = 0
 
         for task in self.tasks.values():
-            if task.status == "in_progress":
+            if task.status == "running":
                 task.status = "stopped"
                 task.error = "Task stopped during bot shutdown"
                 task.updated_at = datetime.now().isoformat()
@@ -429,7 +427,7 @@ class TaskManager:
         if not task:
             return False, f"Task #{task_id} not found."
 
-        if task.status not in ["pending", "in_progress"]:
+        if task.status not in ["pending", "running"]:
             return False, f"Task #{task_id} is not running (status: {task.status})."
 
         # Try to kill the process if we have a PID
@@ -481,3 +479,34 @@ class TaskManager:
             logger.info(f"Auto-retried {len(new_tasks)} stopped tasks on startup")
 
         return new_tasks
+
+    def stop_all_tasks(self, user_id: int) -> tuple[int, int, list[str]]:
+        """
+        Stop all active tasks for a user.
+
+        Args:
+            user_id: User ID whose tasks to stop
+
+        Returns:
+            (stopped_count, failed_count, failed_task_ids) tuple
+        """
+        active_tasks = self.get_active_tasks(user_id)
+
+        if not active_tasks:
+            return 0, 0, []
+
+        stopped_count = 0
+        failed_count = 0
+        failed_task_ids = []
+
+        for task in active_tasks:
+            success, message = self.stop_task(task.task_id)
+            if success:
+                stopped_count += 1
+            else:
+                failed_count += 1
+                failed_task_ids.append(task.task_id)
+
+        logger.info(f"Stopped {stopped_count}/{len(active_tasks)} tasks for user {user_id}")
+
+        return stopped_count, failed_count, failed_task_ids

@@ -3,14 +3,156 @@ Claude API integration for question answering and routing
 Replaces orchestrator agent with direct Anthropic API calls
 """
 
+import html
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 import anthropic
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_xml_content(text: str) -> str:
+    """
+    Sanitize text for safe inclusion in XML prompt structure.
+    Prevents prompt injection via XML tag manipulation.
+
+    Args:
+        text: Raw user input or untrusted content
+
+    Returns:
+        Escaped text safe for XML inclusion
+    """
+    if not text:
+        return ""
+
+    # HTML escape to prevent XML tag injection
+    escaped = html.escape(text, quote=True)
+
+    # Additional safeguards against prompt manipulation
+    # Remove potential prompt break patterns
+    dangerous_patterns = [
+        r"</\w+>",  # Closing XML tags
+        r"<\w+[^>]*>",  # Opening XML tags
+        r"\[INST\]",  # Common injection patterns
+        r"\[/INST\]",
+        r"<\|im_start\|>",
+        r"<\|im_end\|>",
+        r"```xml",  # Code block attempts
+        r"```python",
+    ]
+
+    for pattern in dangerous_patterns:
+        if re.search(pattern, escaped, re.IGNORECASE):
+            # Replace with safe version
+            escaped = re.sub(pattern, "", escaped, flags=re.IGNORECASE)
+            logger.warning(f"Removed dangerous pattern from input: {pattern}")
+
+    return escaped
+
+
+def detect_prompt_injection(text: str) -> tuple[bool, str | None]:
+    """
+    Detect potential prompt injection attempts.
+
+    Args:
+        text: User input to analyze
+
+    Returns:
+        (is_malicious, reason) - True if injection detected, with explanation
+    """
+    if not text or len(text) < 10:
+        return False, None
+
+    # Suspicious patterns that indicate prompt manipulation attempts
+    injection_patterns = [
+        (r"\bignore\b.{0,20}\binstructions?\b", "Instruction override attempt"),
+        (r"\bdisregard\b.{0,20}\binstructions?\b", "Instruction override attempt"),
+        (r"\bforget\b.{0,20}\binstructions?\b", "Instruction override attempt"),
+        (r"new instructions?:", "Instruction injection attempt"),
+        (r"system:?\s*(you (are|must|should)|prompt)", "System role manipulation"),
+        (r"<\|im_start\|>", "System prompt injection"),
+        (r"\[INST\]", "Instruction tag injection"),
+        (r"\[/INST\]", "Instruction tag injection"),
+        (r"act as (a |an )?different", "Role manipulation"),
+        (r"you('re| are) (now |actually |really )", "Identity manipulation"),
+        (r"</?(role|context|capabilities|system|assistant|user)>", "XML structure manipulation"),
+        (r"BACKGROUND_TASK\s*\|", "Task format injection"),
+    ]
+
+    text_lower = text.lower()
+
+    for pattern, reason in injection_patterns:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            logger.warning(f"Prompt injection detected: {reason} in text: {text[:100]}")
+            return True, reason
+
+    # Check for excessive XML-like tags
+    xml_tag_count = len(re.findall(r"</?\w+>", text))
+    if xml_tag_count > 5:
+        logger.warning(f"Excessive XML tags detected: {xml_tag_count} tags")
+        return True, "Excessive XML tag usage"
+
+    # Check for very long inputs (potential DOS or obfuscation)
+    if len(text) > 10000:
+        logger.warning(f"Unusually long input detected: {len(text)} characters")
+        return True, "Input too long"
+
+    return False, None
+
+
+def validate_file_path(file_path: str, base_path: str | None = None) -> bool:
+    """
+    Validate file path to prevent directory traversal attacks.
+
+    Args:
+        file_path: Path to validate
+        base_path: Optional base directory to restrict access
+
+    Returns:
+        True if path is safe, False otherwise
+    """
+    if not file_path:
+        return False
+
+    # Check for obvious path traversal patterns in the raw input
+    if ".." in file_path:
+        logger.warning(f"Path traversal attempt detected: {file_path}")
+        return False
+
+    # Absolute paths outside workspace are suspicious (unless no base path)
+    if file_path.startswith("/") and not base_path:
+        logger.warning(f"Absolute path without base restriction: {file_path}")
+        return False
+
+    # If base path provided, ensure resolved path is within it
+    if base_path:
+        try:
+            # Resolve paths to absolute, canonical paths
+            base_resolved = Path(base_path).resolve()
+
+            # If file_path is relative, resolve it relative to base_path
+            if not Path(file_path).is_absolute():
+                resolved = (base_resolved / file_path).resolve()
+            else:
+                resolved = Path(file_path).resolve()
+
+            # Check if resolved path is within base directory
+            try:
+                resolved.relative_to(base_resolved)
+                return True
+            except ValueError:
+                logger.warning(f"Path outside base directory: {file_path} not in {base_path}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Path validation error: {e}")
+            return False
+
+    return True
 
 
 async def ask_claude(
@@ -34,22 +176,66 @@ async def ask_claude(
         - usage_info: Dict with 'input_tokens', 'output_tokens' from API response
     """
 
-    # Build context - minimize tokens
+    # Security: Detect prompt injection attempts
+    is_malicious, injection_reason = detect_prompt_injection(user_query)
+    if is_malicious:
+        logger.warning(f"Blocked prompt injection attempt: {injection_reason}")
+        return (
+            f"I detected a potential security issue in your request ({injection_reason}). Please rephrase your question.",
+            None,
+            None,
+        )
+
+    # Security: Sanitize all user inputs before including in prompt
+    safe_query = sanitize_xml_content(user_query)
+    safe_workspace = sanitize_xml_content(current_workspace or workspace_path)
+    safe_bot_repo = sanitize_xml_content(bot_repository)
+
+    # Security: Validate image path if provided
+    if image_path and not validate_file_path(image_path):
+        logger.warning(f"Invalid image path rejected: {image_path}")
+        return "Invalid file path provided. Please check the path and try again.", None, None
+
+    # Optimize context: Sanitize and truncate conversation history
+    safe_history = []
+    for msg in conversation_history[-2:]:  # Last 2 messages only
+        safe_msg = {}
+        for key, value in msg.items():
+            if isinstance(value, str):
+                # Truncate very long messages to save tokens
+                truncated = value[:500] if len(value) > 500 else value
+                safe_msg[key] = sanitize_xml_content(truncated)
+            else:
+                safe_msg[key] = value
+        safe_history.append(safe_msg)
+
+    # Optimize context: Only include essential task info
+    safe_tasks = []
+    for task in active_tasks[:3]:  # Max 3 recent tasks
+        safe_task = {
+            "id": task.get("id", ""),
+            "status": task.get("status", ""),
+            # Omit description to save tokens unless critical
+        }
+        safe_tasks.append(safe_task)
+
+    # Build context - minimize tokens and sanitize all values
     context = {
-        "user_query": user_query,
+        "user_query": safe_query,
         "input_method": input_method,
-        "conversation_history": conversation_history[-2:],  # Last 2 messages
-        "current_workspace": current_workspace or workspace_path,
-        "bot_repository": bot_repository,
-        # Only include active tasks if there are any
-        "active_tasks": active_tasks if active_tasks else [],
+        "conversation_history": safe_history,  # Sanitized and truncated
+        "current_workspace": safe_workspace,
+        "bot_repository": safe_bot_repo,
+        # Only include active tasks if there are any (limited to 3)
+        "active_tasks": safe_tasks if safe_tasks else [],
     }
     # Don't include repos list - saves ~100 tokens
 
     if image_path:
-        context["image_path"] = image_path
+        context["image_path"] = sanitize_xml_content(image_path)
 
     # Build system prompt with XML structure for clarity and token efficiency
+    # Note: Context JSON is now sanitized before insertion
     system_prompt = f"""<role>Personal assistant for Matias Fuentes via Telegram. Model: Claude Haiku 4.5 (fast routing & Q&A).</role>
 
 <context>
@@ -147,12 +333,12 @@ Tailor responses to his technical interests
 
 <runtime_config>
 input_method: {input_method} ({'voice - be permissive with errors' if input_method == 'voice' else 'text - exact input'})
-bot_repository: {bot_repository}
-current_workspace: {current_workspace or workspace_path}
-{'image_attached: ' + image_path if image_path else ''}
+bot_repository: {safe_bot_repo}
+current_workspace: {safe_workspace}
+{'image_attached: ' + sanitize_xml_content(image_path) if image_path else ''}
 </runtime_config>
 
-<query>{user_query}</query>"""
+<query>{safe_query}</query>"""
 
     try:
         # Get API key from environment
@@ -216,16 +402,20 @@ current_workspace: {current_workspace or workspace_path}
                             lines = f.readlines()
                             recent_logs = "".join(lines[-50:])
 
+                        # Security: Sanitize log content to prevent injection via logs
+                        # Logs could contain user input or malicious content
+                        safe_logs = sanitize_xml_content(recent_logs)
+
                         messages.append(
-                            {"role": "user", "content": f"{user_query}\n\nRecent log content:\n```\n{recent_logs}\n```"}
+                            {"role": "user", "content": f"{safe_query}\n\nRecent log content:\n```\n{safe_logs}\n```"}
                         )
                     except Exception as e:
                         logger.error(f"Error reading logs: {e}")
-                        messages.append({"role": "user", "content": user_query})
+                        messages.append({"role": "user", "content": safe_query})
                 else:
-                    messages.append({"role": "user", "content": user_query})
+                    messages.append({"role": "user", "content": safe_query})
             else:
-                messages.append({"role": "user", "content": user_query})
+                messages.append({"role": "user", "content": safe_query})
 
         logger.info(f"Calling Claude API (Haiku 4.5) for: {user_query[:60]}...")
 

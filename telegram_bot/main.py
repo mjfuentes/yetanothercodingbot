@@ -52,7 +52,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
     handlers=[
-        logging.FileHandler("logs/bot.log")
+        logging.FileHandler("logs/bot.log"),
         # NOTE: No StreamHandler when running under launchd - it captures stdout/stderr automatically
         # to avoid duplicate log entries
     ],
@@ -514,6 +514,37 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_formatted_response(context, user_id, message)
 
 
+async def stopall_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stopall command - stop all active tasks"""
+    if not await check_authorization(update):
+        return
+
+    user_id = update.effective_user.id
+
+    # Get active tasks
+    active_tasks = task_manager.get_active_tasks(user_id)
+
+    if not active_tasks:
+        await update.message.reply_text("No active tasks to stop.")
+        return
+
+    # Stop all active tasks
+    stopped_count, failed_count, failed_task_ids = task_manager.stop_all_tasks(user_id)
+
+    # Build response message
+    message = f"Stopped {stopped_count} task(s)"
+
+    if failed_count > 0:
+        message += f"\n\nFailed to stop {failed_count} task(s):"
+        for task_id in failed_task_ids:
+            message += f"\n• #{task_id}"
+
+    if stopped_count > 0:
+        message += "\n\nYou can retry stopped tasks with /retry"
+
+    await send_formatted_response(context, user_id, message)
+
+
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /clear command - priority command that executes immediately"""
     if not await check_authorization(update):
@@ -696,7 +727,7 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
 
     try:
         # Update task status
-        task_manager.update_task(task.task_id, status="in_progress")
+        task_manager.update_task(task.task_id, status="running")
         logger.info(f"Starting task execution: {task.task_id} in {task.workspace}")
 
         # Define PID callback to save PID immediately when process starts
@@ -864,7 +895,7 @@ async def process_message_async(
             active_tasks_info = [
                 {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
                 for t in all_tasks
-                if t.status in ["pending", "in_progress"]
+                if t.status in ["pending", "running"]
             ]
 
             # Ask Claude via API (fast, no file tools needed for routing)
@@ -1048,7 +1079,7 @@ async def process_document_async(
             active_tasks_info = [
                 {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
                 for t in all_tasks
-                if t.status in ["pending", "in_progress"]
+                if t.status in ["pending", "running"]
             ]
 
             # Ask Claude API
@@ -1194,7 +1225,7 @@ async def process_photo_async(
             active_tasks_info = [
                 {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
                 for t in all_tasks
-                if t.status in ["pending", "in_progress"]
+                if t.status in ["pending", "running"]
             ]
 
             # Ask Claude API with image
@@ -1327,7 +1358,7 @@ async def process_voice_async(
             active_tasks_info = [
                 {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
                 for t in all_tasks
-                if t.status in ["pending", "in_progress"]
+                if t.status in ["pending", "running"]
             ]
 
             # Ask Claude via API with VOICE input (be permissive with errors)
@@ -1556,6 +1587,7 @@ def main():
                 BotCommand("usage", "Show detailed API usage & costs"),
                 BotCommand("retry", "Retry failed tasks"),
                 BotCommand("stop", "Stop a running task"),
+                BotCommand("stopall", "Stop all active tasks"),
                 BotCommand("clear", "Clear conversation"),
                 BotCommand("restart", "Restart the bot"),
             ]
@@ -1570,7 +1602,7 @@ def main():
 
         # Mark all in-progress tasks as stopped before shutdown
         logger.info("Marking in-progress tasks as stopped...")
-        stopped_count = task_manager.mark_all_in_progress_as_stopped()
+        stopped_count = task_manager.mark_all_running_as_stopped()
         logger.info(f"Marked {stopped_count} tasks as stopped")
 
         logger.info("Stopping worker pool...")
@@ -1694,27 +1726,40 @@ def main():
                 except Exception as cleanup_error:
                     logger.error(f"Failed to clean up restart state file: {cleanup_error}")
 
-        # Retry stopped tasks on startup
-        logger.info("Checking for stopped tasks to retry...")
+        # Clean up old pending tasks (stuck from previous bot issues)
+        logger.info("Checking for orphaned pending tasks...")
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=5)  # Pending > 5 minutes is stuck
+        cleaned = 0
+
+        for task in list(task_manager.tasks.values()):
+            if task.status == "pending":
+                created_time = datetime.fromisoformat(task.created_at)
+                if created_time < cutoff:
+                    # Task stuck in pending - mark as failed
+                    task_manager.update_task(
+                        task.task_id,
+                        status="failed",
+                        error="Task stuck in pending state - never submitted to worker pool",
+                    )
+                    cleaned += 1
+                    logger.warning(f"Cleaned stuck pending task {task.task_id} (created {task.created_at})")
+
+        if cleaned > 0:
+            logger.info(f"Cleaned {cleaned} orphaned pending tasks")
+        else:
+            logger.info("No orphaned pending tasks found")
+
+        # Auto-retry disabled - it creates pending tasks that never get submitted to worker pool
+        # Users can manually retry via /retry command
+        logger.info("Auto-retry of stopped tasks is disabled")
         stopped_tasks = task_manager.get_stopped_tasks()
         if stopped_tasks:
-            logger.info(f"Found {len(stopped_tasks)} stopped tasks, creating retry tasks...")
-            new_tasks = task_manager.retry_all_stopped_tasks()
-
-            # Submit all new tasks to worker pool
-            for new_task in new_tasks:
-                stopped_task = next((t for t in stopped_tasks if t.task_id == new_task.task_id[:-6]), None)
-                if stopped_task:
-                    # Create a minimal Update and Context for the task
-                    # We won't send notifications during startup retry
-                    logger.info(f"Submitting auto-retry task {new_task.task_id} to worker pool")
-                    # Note: We can't submit without Update/Context, so we'll mark them as pending
-                    # and let users manually retry via /retry if needed
-                    pass
-
-            logger.info(f"Created {len(new_tasks)} retry tasks from stopped tasks")
+            logger.info(f"Found {len(stopped_tasks)} stopped tasks - use /retry to retry them manually")
         else:
-            logger.info("No stopped tasks found to retry")
+            logger.info("No stopped tasks found")
 
         # Start log monitoring - DISABLED
         # await start_log_monitor(app)
@@ -1728,6 +1773,7 @@ def main():
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("retry", retry_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("stopall", stopall_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("restart", restart_command))
 

@@ -1022,7 +1022,7 @@
             const grid = document.getElementById('runningTasksGrid');
             const badge = document.getElementById('runningTasksBadge');
 
-            const runningCount = taskStats.by_status.in_progress || 0;
+            const runningCount = taskStats.by_status.running || 0;
             const pendingCount = taskStats.by_status.pending || 0;
             const totalActive = runningCount + pendingCount;
 

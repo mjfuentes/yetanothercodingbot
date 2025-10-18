@@ -103,7 +103,7 @@ class MetricsAggregator:
         all_tasks = list(self.task_manager.tasks.values())
 
         # Count by status
-        status_counts = {"pending": 0, "in_progress": 0, "completed": 0, "failed": 0, "stopped": 0}
+        status_counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0, "stopped": 0}
 
         for task in all_tasks:
             status_counts[task.status] = status_counts.get(task.status, 0) + 1
@@ -220,7 +220,7 @@ class MetricsAggregator:
                 file_sizes[file.name] = round(size_mb, 2)
 
         # Active sessions info
-        active_tasks = [task for task in self.task_manager.tasks.values() if task.status in ["pending", "in_progress"]]
+        active_tasks = [task for task in self.task_manager.tasks.values() if task.status in ["pending", "running"]]
 
         # Recent errors
         recent_errors = []
