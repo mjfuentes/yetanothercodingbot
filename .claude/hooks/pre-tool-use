@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Pre-tool-use hook for tracking Claude Code tool invocations
+# Also validates git commits don't use --no-verify or similar skip flags
 
 set +e  # Don't exit on error - hooks should be resilient
 
@@ -8,6 +9,18 @@ echo "[DEBUG] Hook triggered at $(date)" >> /tmp/hook_debug.log
 
 # Parse input JSON safely
 INPUT=$(cat)
+
+# Check if this is a git commit command with skip flags
+TOOL_NAME=$(echo "$INPUT" | python3 -c "import json, sys; print(json.load(sys.stdin).get('tool_name', ''))" 2>/dev/null)
+if [ "$TOOL_NAME" = "Bash" ]; then
+    COMMAND=$(echo "$INPUT" | python3 -c "import json, sys; print(json.load(sys.stdin).get('tool_input', {}).get('command', ''))" 2>/dev/null)
+
+    # Check for git commit with skip flags
+    if echo "$COMMAND" | grep -q "git commit" && echo "$COMMAND" | grep -qE -- "--no-verify|--no-gpg-sign|-n"; then
+        echo "ERROR: Git commit with skip flags detected. Use of --no-verify, --no-gpg-sign, or -n is not allowed."
+        exit 1
+    fi
+fi
 
 # DEBUG: Log input
 echo "[DEBUG] Input: $INPUT" >> /tmp/hook_debug.log
