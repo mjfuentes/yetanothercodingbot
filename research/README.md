@@ -4,26 +4,20 @@ Research documents for implementation tasks.
 
 ## Workflow
 
-**1. Research Agent** (Code Analysis)
+**1. Research Agent** (Comprehensive Research)
 - Spawned by orchestrator for feature research
-- Tools: Read, Glob, Grep (no WebSearch)
-- Analyzes existing code extensively
-- Compares approaches using training knowledge (up to Jan 2025)
-- Returns comprehensive proposal as text
+- Tools: Read, Glob, Grep, WebSearch, WebFetch
+- **Online research**: Searches docs, comparisons, tutorials (3+ sources, 2024-2025)
+- **Code analysis**: Analyzes existing code extensively
+- **Comparative evaluation**: Compares 2-3 approaches
+- Returns comprehensive proposal combining online + code analysis
 
-**2. General-Purpose Agent** (Online Research - Optional)
-- If current web documentation needed
-- Orchestrator spawns for WebSearch/WebFetch
-- Finds latest docs, comparisons, tutorials
-- Returns findings to orchestrator
-
-**3. Orchestrator** (Document Creation)
-- Receives research from agent(s)
-- Combines code analysis + online research (if any)
+**2. Orchestrator** (Document Saving)
+- Receives full research proposal from research agent
 - Saves to `research/{task_id}_research.md`
 - Provides task ID to code agent
 
-**4. Code Agent** (Implementation)
+**3. Code Agent** (Implementation)
 - Reads `research/{task_id}_research.md` first
 - Follows recommendations and code templates
 - References research in commits
@@ -41,12 +35,28 @@ Research documents for implementation tasks.
 
 **Task ID**: {task_id}
 **Date**: YYYY-MM-DD
-**Sources**: Code Analysis + Training Knowledge [+ Online Research]
+**Sources**: Online Research + Code Analysis
 
 ---
 
 ## Executive Summary
 [2-3 sentences with clear recommendation]
+
+## Online Research
+
+### Source 1: [Official Documentation]
+- **URL**: https://...
+- **Credibility**: ⭐⭐⭐⭐⭐
+- **Date**: 2024-2025
+- **Key Findings**: ...
+
+### Source 2: [Comparison/Tutorial]
+- **URL**: https://...
+- **Key Findings**: ...
+
+### Source 3: [GitHub/Blog]
+- **URL**: https://...
+- **Key Findings**: ...
 
 ## Current Implementation Analysis
 ### Relevant Files
@@ -83,33 +93,38 @@ Research documents for implementation tasks.
 - Manual testing
 
 ## References
-- Code: `file.py:line`
-- Training knowledge: Library v[version]
-- Online (if applicable): [URLs]
+### Online Sources
+- [Docs](url)
+- [Tutorial](url)
+
+### Code Analysis
+- `file.py:line`
 ```
 
 ## Example
 
-See WebSocket research from testing:
+WebSocket research from testing:
 - Task ID: `feature-websocket-support`
-- Analyzed: `monitoring_server.py` SSE implementation
-- Compared: Flask-SocketIO vs alternatives
-- Recommendation: Flask-SocketIO with reasoning
-- Included: Full code templates, 9-12hr estimate
+- **Online research**: Flask-SocketIO docs, comparisons, alternatives
+- **Code analysis**: `monitoring_server.py` SSE implementation
+- **Comparison**: Flask-SocketIO vs websockets vs python-socketio
+- **Recommendation**: Flask-SocketIO (best Flask integration)
+- **Result**: Full code templates, 9-12hr estimate
 
 ## Best Practices
 
 **Research Agent**:
+- ✅ Online research (3+ sources, 2024-2025, with URLs)
 - ✅ Deep code analysis (file:line refs)
 - ✅ Compare 2-3 approaches
 - ✅ Code templates from existing patterns
 - ✅ Realistic time estimates
-- ✅ Note if online research would help
+- ✅ Credibility ratings for sources
 
 **Orchestrator**:
-- ✅ Save research to this folder
+- ✅ Receive research from research agent
+- ✅ Save to `research/{task_id}_research.md`
 - ✅ Pass task ID to code agent
-- ✅ Spawn general-purpose agent for online research if needed
 
 **Code Agent**:
 - ✅ Read research FIRST
