@@ -10,7 +10,7 @@ echo "[DEBUG] Hook triggered at $(date)" >> /tmp/hook_debug.log
 # Parse input JSON safely
 INPUT=$(cat)
 
-# Check if this is a git commit command with skip flags
+# Check if this is a git command with skip/force flags
 TOOL_NAME=$(echo "$INPUT" | python3 -c "import json, sys; print(json.load(sys.stdin).get('tool_name', ''))" 2>/dev/null)
 if [ "$TOOL_NAME" = "Bash" ]; then
     COMMAND=$(echo "$INPUT" | python3 -c "import json, sys; print(json.load(sys.stdin).get('tool_input', {}).get('command', ''))" 2>/dev/null)
@@ -18,6 +18,12 @@ if [ "$TOOL_NAME" = "Bash" ]; then
     # Check for git commit with skip flags
     if echo "$COMMAND" | grep -q "git commit" && echo "$COMMAND" | grep -qE -- "--no-verify|--no-gpg-sign|-n"; then
         echo "ERROR: Git commit with skip flags detected. Use of --no-verify, --no-gpg-sign, or -n is not allowed."
+        exit 1
+    fi
+
+    # Check for force push (--force or -f)
+    if echo "$COMMAND" | grep -q "git push" && echo "$COMMAND" | grep -qE -- "--force|-f[^a-z]"; then
+        echo "ERROR: Force push detected. Use of --force or -f with git push is not allowed."
         exit 1
     fi
 fi
