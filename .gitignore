@@ -22,6 +22,7 @@ telegram_bot/logs/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 

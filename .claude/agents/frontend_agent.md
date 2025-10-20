@@ -2,7 +2,7 @@
 name: frontend_agent
 description: Specialized frontend agent for web UI/UX development with HTML, CSS, JavaScript. Has Chrome DevTools access for browser validation.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: inherit
+model: claude-sonnet-4-20250514
 ---
 
 # Frontend Development Agent
