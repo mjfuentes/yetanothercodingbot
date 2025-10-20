@@ -213,6 +213,9 @@ def task_activity():
         limit = int(request.args.get("limit", 50))
         user_id = request.args.get("user_id")  # Optional filter by user
 
+        # End any stale read transaction to see latest writes
+        task_manager.db.conn.rollback()
+
         # Get tasks from database
         cursor = task_manager.db.conn.cursor()
         if user_id:
@@ -411,6 +414,9 @@ def running_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
+        # End any stale read transaction to see latest writes
+        task_manager.db.conn.rollback()
+
         # Get tasks with status 'running' or 'pending' from database
         cursor = task_manager.db.conn.cursor()
         cursor.execute(
@@ -465,6 +471,9 @@ def completed_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
+        # End any stale read transaction to see latest writes
+        task_manager.db.conn.rollback()
+
         # Get completed tasks from database
         cursor = task_manager.db.conn.cursor()
         cursor.execute(
@@ -518,6 +527,9 @@ def failed_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
+        # End any stale read transaction to see latest writes
+        task_manager.db.conn.rollback()
+
         # Get failed/stopped tasks from database
         cursor = task_manager.db.conn.cursor()
         cursor.execute(
@@ -570,6 +582,9 @@ def all_tasks():
     try:
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
+
+        # End any stale read transaction to see latest writes
+        task_manager.db.conn.rollback()
 
         # Get all tasks from database
         cursor = task_manager.db.conn.cursor()
@@ -673,6 +688,10 @@ def generate_sse_updates(hours: int = 24) -> Generator[str, None, None]:
 
             # Get recent task activity from database
             limit = 20
+
+            # End any stale read transaction to see latest writes
+            task_manager.db.conn.rollback()
+
             cursor = task_manager.db.conn.cursor()
             cursor.execute(
                 """
