@@ -100,51 +100,45 @@ class MetricsAggregator:
 
     def get_task_statistics(self) -> dict[str, Any]:
         """Get task execution statistics"""
-        all_tasks = list(self.task_manager.tasks.values())
+        # Use database statistics method
+        stats = self.task_manager.db.get_task_statistics()
 
-        # Count by status
-        status_counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0, "stopped": 0}
+        # Get recent tasks for detailed view
+        cursor = self.task_manager.db.conn.cursor()
+        cutoff_time = (datetime.now() - timedelta(hours=24)).isoformat()
+        cursor.execute(
+            """
+            SELECT task_id, user_id, description, status, created_at, model
+            FROM tasks
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT 20
+        """,
+            (cutoff_time,),
+        )
 
-        for task in all_tasks:
-            status_counts[task.status] = status_counts.get(task.status, 0) + 1
-
-        # Recent tasks (last 24 hours)
-        cutoff_time = datetime.now() - timedelta(hours=24)
         recent_tasks = []
-        recent_completed = 0
-        recent_failed = 0
-
-        for task in all_tasks:
-            task_time = datetime.fromisoformat(task.created_at)
-            if task_time >= cutoff_time:
-                recent_tasks.append(
-                    {
-                        "task_id": task.task_id,
-                        "user_id": task.user_id,
-                        "description": task.description[:100],
-                        "status": task.status,
-                        "created_at": task.created_at,
-                        "model": task.model,
-                    }
-                )
-                if task.status == "completed":
-                    recent_completed += 1
-                elif task.status == "failed":
-                    recent_failed += 1
-
-        # Calculate success rate
-        total_finished = status_counts["completed"] + status_counts["failed"]
-        success_rate = (status_counts["completed"] / total_finished * 100) if total_finished > 0 else 0.0
+        for row in cursor.fetchall():
+            recent_tasks.append(
+                {
+                    "task_id": row[0],
+                    "user_id": row[1],
+                    "description": row[2][:100],
+                    "status": row[3],
+                    "created_at": row[4],
+                    "model": row[5],
+                }
+            )
 
         return {
-            "total_tasks": len(all_tasks),
-            "by_status": status_counts,
-            "success_rate": success_rate,
+            "total_tasks": stats["total"],
+            "by_status": stats["by_status"],
+            "success_rate": stats["success_rate"],
             "recent_24h": {
-                "total": len(recent_tasks),
-                "completed": recent_completed,
-                "failed": recent_failed,
-                "tasks": recent_tasks[:20],  # Last 20 tasks
+                "total": stats["recent_24h"],
+                "completed": stats["by_status"].get("completed", 0),
+                "failed": stats["by_status"].get("failed", 0),
+                "tasks": recent_tasks,
             },
         }
 
@@ -210,42 +204,55 @@ class MetricsAggregator:
 
     def get_system_health(self) -> dict[str, Any]:
         """Get system health metrics"""
-        # Check data file sizes
+        # Check data file sizes (now includes database)
         data_dir = Path("data")
         file_sizes = {}
 
         if data_dir.exists():
+            # Include JSON files (if any remain for backwards compat)
             for file in data_dir.glob("*.json"):
                 size_mb = file.stat().st_size / (1024 * 1024)
                 file_sizes[file.name] = round(size_mb, 2)
 
-        # Active sessions info
-        active_tasks = [task for task in self.task_manager.tasks.values() if task.status in ["pending", "running"]]
+            # Include database file
+            db_file = data_dir / "agentlab.db"
+            if db_file.exists():
+                size_mb = db_file.stat().st_size / (1024 * 1024)
+                file_sizes["agentlab.db"] = round(size_mb, 2)
 
-        # Recent errors
+        # Active tasks count from database
+        cursor = self.task_manager.db.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('pending', 'running')")
+        active_tasks_count = cursor.fetchone()[0]
+
+        # Recent errors from database
+        cutoff_time = (datetime.now() - timedelta(hours=24)).isoformat()
+        cursor.execute(
+            """
+            SELECT task_id, created_at, error
+            FROM tasks
+            WHERE status = 'failed' AND error IS NOT NULL AND created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT 10
+        """,
+            (cutoff_time,),
+        )
+
         recent_errors = []
-        cutoff_time = datetime.now() - timedelta(hours=24)
-
-        for task in self.task_manager.tasks.values():
-            if task.status == "failed" and task.error:
-                task_time = datetime.fromisoformat(task.created_at)
-                if task_time >= cutoff_time:
-                    recent_errors.append(
-                        {
-                            "task_id": task.task_id,
-                            "timestamp": task.created_at,
-                            "error": task.error[:200],  # Truncate long errors
-                        }
-                    )
-
-        # Sort by timestamp (most recent first)
-        recent_errors.sort(key=lambda x: x["timestamp"], reverse=True)
+        for row in cursor.fetchall():
+            recent_errors.append(
+                {
+                    "task_id": row[0],
+                    "timestamp": row[1],
+                    "error": row[2][:200] if row[2] else "",  # Truncate long errors
+                }
+            )
 
         return {
             "data_file_sizes_mb": file_sizes,
-            "active_tasks_count": len(active_tasks),
+            "active_tasks_count": active_tasks_count,
             "recent_errors_24h": len(recent_errors),
-            "recent_errors": recent_errors[:10],  # Last 10 errors
+            "recent_errors": recent_errors,
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -280,7 +287,7 @@ class MetricsAggregator:
             hours: Time window in hours
             interval_minutes: Data point interval in minutes
         """
-        cutoff_time = datetime.now() - timedelta(hours=hours)
+        cutoff_time = datetime.now().replace(tzinfo=None) - timedelta(hours=hours)
         interval_delta = timedelta(minutes=interval_minutes)
 
         # Initialize time buckets
@@ -299,35 +306,52 @@ class MetricsAggregator:
             )
             current_time += interval_delta
 
-        # Aggregate data into buckets
+        # Aggregate data into buckets - Cost tracker (still uses JSON)
         for usage in self.cost_tracker.users.values():
             for record in usage.records:
                 record_time = datetime.fromisoformat(record.timestamp)
                 if record_time >= cutoff_time:
-                    # Find appropriate bucket
                     bucket_index = int((record_time - cutoff_time).total_seconds() / (interval_minutes * 60))
                     if 0 <= bucket_index < len(buckets):
                         buckets[bucket_index]["requests"] += 1
                         buckets[bucket_index]["cost"] += record.cost
 
-        # Add task data
-        for task in self.task_manager.tasks.values():
-            task_time = datetime.fromisoformat(task.created_at)
-            if task_time >= cutoff_time:
-                bucket_index = int((task_time - cutoff_time).total_seconds() / (interval_minutes * 60))
-                if 0 <= bucket_index < len(buckets):
-                    if task.status == "completed":
-                        buckets[bucket_index]["tasks_completed"] += 1
-                    elif task.status == "failed":
-                        buckets[bucket_index]["tasks_failed"] += 1
+        # Add task data from database
+        cursor = self.task_manager.db.conn.cursor()
+        cursor.execute(
+            """
+            SELECT created_at, status
+            FROM tasks
+            WHERE created_at >= ?
+        """,
+            (cutoff_time.isoformat(),),
+        )
 
-        # Add tool usage data (count all tool records, not just those with duration)
-        for record in self.tool_usage_tracker.tool_records:
-            record_time = datetime.fromisoformat(record.timestamp)
-            if record_time >= cutoff_time:
-                bucket_index = int((record_time - cutoff_time).total_seconds() / (interval_minutes * 60))
-                if 0 <= bucket_index < len(buckets):
-                    buckets[bucket_index]["tool_calls"] += 1
+        for row in cursor.fetchall():
+            task_time = datetime.fromisoformat(row[0]).replace(tzinfo=None)
+            status = row[1]
+            bucket_index = int((task_time - cutoff_time).total_seconds() / (interval_minutes * 60))
+            if 0 <= bucket_index < len(buckets):
+                if status == "completed":
+                    buckets[bucket_index]["tasks_completed"] += 1
+                elif status == "failed":
+                    buckets[bucket_index]["tasks_failed"] += 1
+
+        # Add tool usage data from database
+        cursor.execute(
+            """
+            SELECT timestamp
+            FROM tool_usage
+            WHERE timestamp >= ?
+        """,
+            (cutoff_time.isoformat(),),
+        )
+
+        for row in cursor.fetchall():
+            record_time = datetime.fromisoformat(row[0]).replace(tzinfo=None)
+            bucket_index = int((record_time - cutoff_time).total_seconds() / (interval_minutes * 60))
+            if 0 <= bucket_index < len(buckets):
+                buckets[bucket_index]["tool_calls"] += 1
 
         return {
             "time_window_hours": hours,

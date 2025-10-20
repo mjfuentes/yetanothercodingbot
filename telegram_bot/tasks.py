@@ -1,15 +1,17 @@
 """
 Task tracking system for background operations
 Phase 3-4: Orchestrator & worker task management
+Now using SQLite for better performance and querying
 """
 
-import json
 import logging
 import os
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+
+from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -80,108 +82,65 @@ class Task:
 
 
 class TaskManager:
-    """Manages background tasks"""
+    """Manages background tasks using SQLite"""
 
     def __init__(self, data_dir: str = "data"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
-        self.tasks_file = self.data_dir / "tasks.json"
-        self.tasks: dict[str, Task] = {}
 
-        # Load existing tasks
-        self._load_tasks()
+        # Initialize SQLite database
+        db_path = self.data_dir / "agentlab.db"
+        self.db = Database(str(db_path))
 
-        logger.info(f"TaskManager initialized with {len(self.tasks)} tasks")
+        # Check running tasks - mark as stopped if process died
+        self._check_running_tasks()
 
-    def _load_tasks(self):
-        """Load tasks from disk"""
-        if not self.tasks_file.exists():
-            return
+        # Get task count for logging
+        stats = self.db.get_database_stats()
+        logger.info(f"TaskManager initialized with {stats['tasks']} tasks")
 
-        try:
-            with open(self.tasks_file) as f:
-                data = json.load(f)
-                for task_id, task_data in data.items():
-                    self.tasks[task_id] = Task.from_dict(task_data)
+    def _check_running_tasks(self):
+        """Check running tasks on startup - mark as stopped if process died"""
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT task_id, pid FROM tasks WHERE status = 'running'")
+        running_tasks = cursor.fetchall()
 
-            logger.info(f"Loaded {len(self.tasks)} tasks from disk")
-
-            # Check running tasks - mark as stopped if process died
-            running_tasks = [task for task in self.tasks.values() if task.status == "running"]
-
-            if running_tasks:
-                for task in running_tasks:
-                    if task.pid and is_process_alive(task.pid):
-                        # Task survived restart! Process still running
-                        logger.info(f"Task {task.task_id} (PID {task.pid}) still running after restart")
-                    else:
-                        # Process died (or no PID tracked) - mark as stopped
-                        task.status = "stopped"
-                        task.error = "Task stopped due to bot restart"
-                        task.updated_at = datetime.now().isoformat()
-                        logger.warning(f"Marked stopped task {task.task_id}: {task.description}")
-
-                # Save updated state
-                self._save_tasks()
-
-        except Exception as e:
-            logger.error(f"Error loading tasks: {e}")
+        if running_tasks:
+            for row in running_tasks:
+                task_id, pid = row
+                if pid and is_process_alive(pid):
+                    # Task survived restart! Process still running
+                    logger.info(f"Task {task_id} (PID {pid}) still running after restart")
+                else:
+                    # Process died (or no PID tracked) - mark as stopped
+                    self.db.update_task(task_id, status="stopped", error="Task stopped due to bot restart")
+                    logger.warning(f"Marked stopped task {task_id}")
 
     def reload_tasks(self):
         """
-        Reload tasks from disk to get latest state.
-        Useful for monitoring/read-only access to task data.
+        Reload tasks - no-op for SQLite backend since queries are always fresh.
+        Kept for API compatibility.
         """
-        if not self.tasks_file.exists():
-            return
-
-        try:
-            with open(self.tasks_file) as f:
-                data = json.load(f)
-                self.tasks.clear()
-                for task_id, task_data in data.items():
-                    self.tasks[task_id] = Task.from_dict(task_data)
-
-            logger.debug(f"Reloaded {len(self.tasks)} tasks from disk")
-
-        except Exception as e:
-            logger.error(f"Error reloading tasks: {e}")
-
-    def _save_tasks(self):
-        """Save tasks to disk"""
-        try:
-            data = {task_id: task.to_dict() for task_id, task in self.tasks.items()}
-
-            with open(self.tasks_file, "w") as f:
-                json.dump(data, f, indent=2)
-
-        except Exception as e:
-            logger.error(f"Error saving tasks: {e}")
+        logger.debug("reload_tasks() called - no-op for SQLite backend")
 
     def create_task(
         self, user_id: int, description: str, workspace: str, model: str = "sonnet", agent_type: str = "code_agent"
     ) -> Task:
         """Create a new task"""
-        now = datetime.now().isoformat()
         task_id = str(uuid.uuid4())[:6]
 
-        task = Task(
+        # Create in database
+        task_dict = self.db.create_task(
             task_id=task_id,
             user_id=user_id,
             description=description,
-            status="pending",
-            created_at=now,
-            updated_at=now,
-            model=model,
             workspace=workspace,
+            model=model,
             agent_type=agent_type,
         )
 
-        self.tasks[task_id] = task
-        self._save_tasks()
-
         logger.info(f"Created {agent_type} task {task_id} for user {user_id} in {workspace}: {description}")
-        return task
+        return Task.from_dict(task_dict)
 
     def update_task(
         self,
@@ -192,69 +151,51 @@ class TaskManager:
         pid: int | None = None,
     ):
         """Update task status"""
-        if task_id not in self.tasks:
+        success = self.db.update_task(
+            task_id=task_id,
+            status=status,
+            result=result,
+            error=error,
+            pid=pid,
+        )
+
+        if not success:
             logger.error(f"Task {task_id} not found")
             return
-
-        task = self.tasks[task_id]
-
-        if status:
-            task.status = status
-        if result:
-            task.result = result
-        if error:
-            task.error = error
-        if pid is not None:
-            task.pid = pid
-
-        task.updated_at = datetime.now().isoformat()
-        self._save_tasks()
 
         logger.info(f"Updated task {task_id}: status={status}, pid={pid}")
 
     def log_activity(self, task_id: str, message: str, output_lines: int | None = None, save: bool = True):
         """Log activity for a task"""
-        if task_id not in self.tasks:
+        success = self.db.add_activity(task_id, message, output_lines)
+
+        if not success:
             logger.error(f"Task {task_id} not found")
             return
-
-        task = self.tasks[task_id]
-        task.add_activity(message, output_lines)
-        task.updated_at = datetime.now().isoformat()
-
-        if save:
-            self._save_tasks()
 
         logger.debug(f"Task {task_id} activity: {message}")
 
     def get_task(self, task_id: str) -> Task | None:
         """Get task by ID"""
-        return self.tasks.get(task_id)
+        task_dict = self.db.get_task(task_id)
+        return Task.from_dict(task_dict) if task_dict else None
 
     def get_user_tasks(self, user_id: int, status: str | None = None, limit: int = 10) -> list[Task]:
         """Get tasks for a user"""
-        user_tasks = [task for task in self.tasks.values() if task.user_id == user_id]
-
-        if status:
-            user_tasks = [t for t in user_tasks if t.status == status]
-
-        # Sort by created_at descending
-        user_tasks.sort(key=lambda t: t.created_at, reverse=True)
-
-        return user_tasks[:limit]
+        task_dicts = self.db.get_user_tasks(user_id, status, limit)
+        return [Task.from_dict(t) for t in task_dicts]
 
     def get_active_tasks(self, user_id: int) -> list[Task]:
         """Get active (pending/running) tasks for user"""
-        return [
-            task for task in self.tasks.values() if task.user_id == user_id and task.status in ["pending", "running"]
-        ]
+        task_dicts = self.db.get_active_tasks(user_id)
+        return [Task.from_dict(t) for t in task_dicts]
 
     def retry_task(self, task_id: str) -> Task | None:
         """
         Retry a failed or stopped task by creating a new task with the same parameters.
         Returns the new task if successful, None if task not found or not retryable.
         """
-        original_task = self.tasks.get(task_id)
+        original_task = self.get_task(task_id)
 
         if not original_task:
             logger.error(f"Task {task_id} not found")
@@ -278,12 +219,8 @@ class TaskManager:
 
     def get_failed_tasks(self, user_id: int, limit: int = 10) -> list[Task]:
         """Get failed tasks for a user"""
-        failed_tasks = [task for task in self.tasks.values() if task.user_id == user_id and task.status == "failed"]
-
-        # Sort by created_at descending
-        failed_tasks.sort(key=lambda t: t.created_at, reverse=True)
-
-        return failed_tasks[:limit]
+        task_dicts = self.db.get_failed_tasks(user_id, limit)
+        return [Task.from_dict(t) for t in task_dicts]
 
     def clear_old_failed_tasks(self, user_id: int, older_than_hours: int = 24):
         """
@@ -297,34 +234,7 @@ class TaskManager:
         Returns:
             Number of tasks cleared
         """
-        from datetime import datetime, timedelta
-
-        cutoff_time = datetime.now() - timedelta(hours=older_than_hours)
-        cleared_count = 0
-
-        # Find tasks to remove
-        tasks_to_remove = []
-        for task_id, task in self.tasks.items():
-            if task.user_id == user_id and task.status == "failed":
-                try:
-                    task_time = datetime.fromisoformat(task.created_at)
-                    if task_time < cutoff_time:
-                        tasks_to_remove.append(task_id)
-                except ValueError:
-                    # If we can't parse the timestamp, skip this task
-                    logger.warning(f"Could not parse timestamp for task {task_id}: {task.created_at}")
-                    continue
-
-        # Remove old failed tasks
-        for task_id in tasks_to_remove:
-            del self.tasks[task_id]
-            cleared_count += 1
-            logger.info(f"Cleared old failed task {task_id}")
-
-        if cleared_count > 0:
-            self._save_tasks()
-            logger.info(f"Cleared {cleared_count} old failed tasks for user {user_id}")
-
+        cleared_count = self.db.clear_old_failed_tasks(user_id, older_than_hours)
         return cleared_count
 
     def mark_all_running_as_stopped(self):
@@ -335,20 +245,7 @@ class TaskManager:
         Returns:
             Number of tasks marked as stopped
         """
-        stopped_count = 0
-
-        for task in self.tasks.values():
-            if task.status == "running":
-                task.status = "stopped"
-                task.error = "Task stopped during bot shutdown"
-                task.updated_at = datetime.now().isoformat()
-                stopped_count += 1
-                logger.info(f"Marked task {task.task_id} as stopped during shutdown")
-
-        if stopped_count > 0:
-            self._save_tasks()
-            logger.info(f"Marked {stopped_count} tasks as stopped during shutdown")
-
+        stopped_count = self.db.mark_all_running_as_stopped()
         return stopped_count
 
     def get_stopped_tasks(self, user_id: int | None = None, limit: int = 100) -> list[Task]:
@@ -362,16 +259,8 @@ class TaskManager:
         Returns:
             List of stopped tasks
         """
-        stopped_tasks = [
-            task
-            for task in self.tasks.values()
-            if task.status == "stopped" and (user_id is None or task.user_id == user_id)
-        ]
-
-        # Sort by created_at descending
-        stopped_tasks.sort(key=lambda t: t.created_at, reverse=True)
-
-        return stopped_tasks[:limit]
+        task_dicts = self.db.get_stopped_tasks(user_id, limit)
+        return [Task.from_dict(t) for t in task_dicts]
 
     def cleanup_stale_pending_tasks(self, max_age_hours: int = 1) -> int:
         """
@@ -384,32 +273,7 @@ class TaskManager:
         Returns:
             Number of tasks cleaned up
         """
-        from datetime import datetime, timedelta
-
-        now = datetime.now()
-        cutoff_time = now - timedelta(hours=max_age_hours)
-        cleaned_count = 0
-
-        for task in self.tasks.values():
-            if task.status == "pending":
-                try:
-                    task_time = datetime.fromisoformat(task.created_at)
-                    if task_time < cutoff_time:
-                        task.status = "failed"
-                        task.error = (
-                            f"Task was pending for more than {max_age_hours}h without being picked up by worker"
-                        )
-                        task.updated_at = now.isoformat()
-                        cleaned_count += 1
-                        logger.info(f"Cleaned up stale pending task {task.task_id}: {task.description[:50]}")
-                except ValueError:
-                    logger.warning(f"Could not parse timestamp for task {task.task_id}: {task.created_at}")
-                    continue
-
-        if cleaned_count > 0:
-            self._save_tasks()
-            logger.info(f"Cleaned up {cleaned_count} stale pending tasks")
-
+        cleaned_count = self.db.cleanup_stale_pending_tasks(max_age_hours)
         return cleaned_count
 
     def stop_task(self, task_id: str) -> tuple[bool, str]:
@@ -422,7 +286,7 @@ class TaskManager:
         Returns:
             (success, message) tuple
         """
-        task = self.tasks.get(task_id)
+        task = self.get_task(task_id)
 
         if not task:
             return False, f"Task #{task_id} not found."
@@ -440,10 +304,7 @@ class TaskManager:
                 return False, f"Failed to stop task #{task_id}: {e}"
 
         # Update task status
-        task.status = "stopped"
-        task.error = "Task stopped by user"
-        task.updated_at = datetime.now().isoformat()
-        self._save_tasks()
+        self.db.update_task(task_id, status="stopped", error="Task stopped by user")
 
         logger.info(f"Stopped task {task_id} (was {task.status})")
         return True, f"Task #{task_id} stopped successfully."
