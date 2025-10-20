@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YetAnotherCodingBot Monitoring Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             /* Grayscale color palette (light mode) */
@@ -50,6 +51,121 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+        }
+
+        /* Markdown content styling */
+        .markdown-content {
+            font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+            font-size: 0.9375rem;
+            line-height: 1.7;
+            color: var(--text-primary);
+        }
+
+        .markdown-content h1 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin: 1.5rem 0 1rem 0;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        .markdown-content h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin: 1.25rem 0 0.75rem 0;
+            padding-bottom: 0.35rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .markdown-content h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 1rem 0 0.5rem 0;
+        }
+
+        .markdown-content h4 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin: 0.875rem 0 0.5rem 0;
+        }
+
+        .markdown-content p {
+            margin: 0.75rem 0;
+        }
+
+        .markdown-content ul, .markdown-content ol {
+            margin: 0.75rem 0;
+            padding-left: 2rem;
+        }
+
+        .markdown-content li {
+            margin: 0.25rem 0;
+        }
+
+        .markdown-content code {
+            background: var(--bg-tertiary);
+            padding: 0.15rem 0.4rem;
+            border-radius: 0.25rem;
+            font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Monaco, 'Courier New', monospace;
+            font-size: 0.875em;
+            border: 1px solid var(--border-color);
+        }
+
+        .markdown-content pre {
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            border: 1px solid var(--border-color);
+        }
+
+        .markdown-content pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            font-size: 0.875rem;
+        }
+
+        .markdown-content blockquote {
+            border-left: 4px solid var(--accent-primary);
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .markdown-content a {
+            color: var(--accent-blue);
+            text-decoration: underline;
+        }
+
+        .markdown-content a:hover {
+            color: var(--accent-primary);
+        }
+
+        .markdown-content table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1rem 0;
+        }
+
+        .markdown-content table th,
+        .markdown-content table td {
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+        }
+
+        .markdown-content table th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+        }
+
+        .markdown-content hr {
+            border: none;
+            border-top: 2px solid var(--border-color);
+            margin: 1.5rem 0;
         }
 
         body {
@@ -952,7 +1068,7 @@
                 <button class="modal-close" onclick="closeDocModal()">&times;</button>
             </div>
             <div class="modal-body">
-                <div id="docContent" style="font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Monaco, 'Courier New', monospace; font-size: 0.875rem; line-height: 1.6; white-space: pre-wrap; overflow-x: auto;">
+                <div id="docContent" class="markdown-content">
                     <div class="no-data">Loading...</div>
                 </div>
             </div>
@@ -1720,9 +1836,23 @@
                     return;
                 }
 
-                // Display content with basic markdown-style formatting
+                // Render markdown content
                 const content = data.content;
-                document.getElementById('docContent').textContent = content;
+                const isMarkdown = path.toLowerCase().endsWith('.md');
+
+                if (isMarkdown && typeof marked !== 'undefined') {
+                    // Configure marked for better rendering
+                    marked.setOptions({
+                        breaks: true,
+                        gfm: true,
+                        headerIds: true,
+                        mangle: false
+                    });
+                    document.getElementById('docContent').innerHTML = marked.parse(content);
+                } else {
+                    // Plain text fallback
+                    document.getElementById('docContent').innerHTML = `<pre style="white-space: pre-wrap; font-family: ui-monospace, monospace;">${escapeHtml(content)}</pre>`;
+                }
 
             } catch (error) {
                 console.error('Error loading document content:', error);
