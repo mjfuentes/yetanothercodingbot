@@ -228,6 +228,14 @@ class ClaudeInteractiveSession:
             if self.agent:
                 cmd.extend(["--agents", self.agent])
 
+                # Enforce tool restrictions based on agent type
+                # orchestrator.md specifies "tools: Task" - enforce this restriction
+                if self.agent == "orchestrator":
+                    cmd.extend(["--allowed-tools", "Task", "TodoWrite"])
+                # research_agent.md specifies read-only tools
+                elif self.agent == "research_agent":
+                    cmd.extend(["--allowed-tools", "Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"])
+
             logger.info(f"Starting Claude interactive session for task {task_id}")
             logger.info(f"Command: {' '.join(cmd)}")
             logger.info(f"Workspace: {self.workspace}")
