@@ -35,13 +35,62 @@ telegram_bot/
 └── formatter.py         # Telegram message formatting
 
 .claude/
-├── agents/              # Agent definitions (orchestrator, code, frontend, research)
+├── agents/              # Agent definitions
+│   ├── orchestrator.md            # Task coordinator
+│   ├── code_agent.md              # Backend implementation (Sonnet 4.5)
+│   ├── frontend_agent.md          # UI/UX development (Sonnet 4.5)
+│   ├── research_agent.md          # Analysis & proposals (Opus 4.5)
+│   ├── Jenny.md                   # Spec verification
+│   ├── claude-md-compliance-checker.md  # Project compliance
+│   ├── code-quality-pragmatist.md       # Complexity detection
+│   ├── karen.md                   # Reality checks
+│   ├── task-completion-validator.md     # Functional validation
+│   ├── ui-comprehensive-tester.md       # UI testing
+│   └── ultrathink-debugger.md           # Deep debugging (Opus 4.5)
 ├── hooks/               # Tool usage tracking (pre/post-tool-use, session-end)
 └── settings.local.json  # Permissions, output style
 
 data/                    # Runtime state (sessions, tasks, costs)
 logs/                    # Application logs
 ```
+
+### Agent Architecture
+
+#### Core Agents
+- **orchestrator**: Coordinates tasks, delegates to specialized agents
+- **code_agent**: Backend implementation (Python, Sonnet 4.5)
+- **frontend_agent**: UI/UX development (HTML/CSS/JS, Sonnet 4.5)
+- **research_agent**: Analysis, proposals, web research (Opus 4.5)
+
+#### Quality Assurance Agents
+- **Jenny**: Verifies implementation matches specifications
+- **claude-md-compliance-checker**: Ensures CLAUDE.md adherence
+- **code-quality-pragmatist**: Detects over-engineering
+- **karen**: Reality check on project completion
+- **task-completion-validator**: Validates tasks actually work
+- **ui-comprehensive-tester**: Comprehensive UI testing
+- **ultrathink-debugger**: Deep debugging (Opus 4.5 - expensive, use sparingly)
+
+#### Agent Workflow Examples
+
+**Code Implementation Flow:**
+1. orchestrator receives task
+2. research_agent (if research needed)
+3. code_agent (implementation)
+4. task-completion-validator (verify it works)
+5. code-quality-pragmatist (check complexity)
+6. claude-md-compliance-checker (verify CLAUDE.md compliance)
+
+**Bug Investigation Flow:**
+1. orchestrator receives bug report
+2. ultrathink-debugger (deep root cause analysis)
+3. code_agent (implement fix)
+4. task-completion-validator (verify fix works)
+
+**Spec Verification Flow:**
+1. orchestrator receives verification request
+2. Jenny (compare implementation vs specs)
+3. task-completion-validator (if gaps found, verify fixes)
 
 ### Naming Conventions
 
@@ -167,6 +216,18 @@ validate_file_path(path, base_path)  # Prevent directory traversal
 **Model selection**:
 - Haiku 4.5 for Q&A (10x cheaper)
 - Sonnet 4.5 for coding (more capable)
+- Opus 4.5 for research_agent and ultrathink-debugger (most capable, most expensive)
+
+**Cost-aware agent usage**:
+- research_agent (Opus): Use for complex analysis only
+- ultrathink-debugger (Opus): Reserve for critical bugs and deep debugging
+- Other agents (Sonnet/inherited): Standard usage
+
+**Model specification rationale**:
+- Explicit model specifications added to agents for cost predictability
+- code_agent, frontend_agent: Sonnet 4.5 for balance of capability/cost
+- research_agent: Opus 4.5 for comprehensive research and analysis
+- ultrathink-debugger: Opus 4.5 for deep reasoning in complex debugging
 
 ### Background Task Format
 
