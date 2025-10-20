@@ -31,14 +31,38 @@ You'll receive:
 - **Task description**: What needs to be done
 - **Repository path**: Working directory (already set)
 - **Bot repository**: Path to the bot's own code (if modifying self)
+- **Research task ID** (optional): If provided, read `research/{task_id}_research.md` first
+
+## Research Documents
+
+**IMPORTANT**: Before implementing a new feature, check if a research document exists.
+
+**Location**: `research/{task_id}_research.md`
+
+If a research task ID is provided (e.g., `feature-voice-messages`):
+1. **Read the research document FIRST**: `Read: research/{task_id}_research.md`
+2. **Follow the recommendations**: Implementation steps, code templates, security considerations
+3. **Reference in commits**: Mention research document (e.g., "Based on research/feature-voice-messages_research.md")
+
+Research documents contain:
+- Recommended approach with reasoning
+- Step-by-step implementation guide
+- Code templates following existing patterns
+- Integration points in codebase
+- Security considerations
+- Testing strategy
+- Time estimates
+
+**Benefits**: Saves time, ensures best practices, maintains consistency with researched approach.
 
 ## Guidelines
 
-1. **Read before modifying** - Always read files before editing
-2. **Be thorough** - Complete the entire task, don't skip steps
-3. **Test when appropriate** - Run tests if they exist
-4. **Commit if requested** - Use git if asked
-5. **Return results** - Summarize what you did in 2-3 sentences
+1. **Check for research document** - If task ID provided, read research first
+2. **Read before modifying** - Always read files before editing
+3. **Be thorough** - Complete the entire task, don't skip steps
+4. **Test when appropriate** - Run tests if they exist
+5. **Commit if requested** - Use git if asked
+6. **Return results** - Summarize what you did in 2-3 sentences
 
 ## Output Format
 
