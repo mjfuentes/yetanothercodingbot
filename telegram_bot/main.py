@@ -77,7 +77,7 @@ claude_pool = ClaudeSessionPool(usage_tracker=tool_usage_tracker)  # No default 
 cost_tracker = CostTracker()  # Track API costs
 rate_limiter = RateLimiter()  # Rate limiting
 queue_manager = MessageQueueManager()  # Message queue per user
-agent_pool = AgentPool(max_workers=3)  # Bounded worker pool for background tasks
+agent_pool = AgentPool(max_agents=3)  # Bounded agent pool for background tasks
 
 # Log monitoring system
 log_monitor_config = MonitoringConfig(
@@ -558,12 +558,10 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         all_failed = task_manager.get_failed_tasks(user_id, limit=1000)
         cleared_count = 0
         for task in all_failed:
-            if task.task_id in task_manager.tasks:
-                del task_manager.tasks[task.task_id]
+            if task_manager.db.delete_task(task.task_id):
                 cleared_count += 1
 
         if cleared_count > 0:
-            task_manager._save_tasks()
             logger.info(f"Manually cleared {cleared_count} failed tasks for user {user_id}")
             await update.message.reply_text(f"Cleared {cleared_count} failed task(s) from history.")
         else:
@@ -890,12 +888,18 @@ async def process_message_async(
             response = blocking_msg
             background_task_info = None
         else:
-            # Get active tasks info
-            all_tasks = task_manager.tasks.values()
+            # Get active tasks info from database
+            cursor = task_manager.db.conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_id, description, status, workspace
+                FROM tasks
+                WHERE status IN ('pending', 'running')
+            """
+            )
             active_tasks_info = [
-                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
-                for t in all_tasks
-                if t.status in ["pending", "running"]
+                {"task_id": row[0], "description": row[1], "status": row[2], "workspace": row[3]}
+                for row in cursor.fetchall()
             ]
 
             # Ask Claude via API (fast, no file tools needed for routing)
@@ -1076,12 +1080,18 @@ async def process_document_async(
             response = blocking_msg
             background_task_info = None
         else:
-            # Get active tasks
-            all_tasks = task_manager.tasks.values()
+            # Get active tasks from database
+            cursor = task_manager.db.conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_id, description, status, workspace
+                FROM tasks
+                WHERE status IN ('pending', 'running')
+            """
+            )
             active_tasks_info = [
-                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
-                for t in all_tasks
-                if t.status in ["pending", "running"]
+                {"task_id": row[0], "description": row[1], "status": row[2], "workspace": row[3]}
+                for row in cursor.fetchall()
             ]
 
             # Ask Claude API
@@ -1222,12 +1232,18 @@ async def process_photo_async(
             response = blocking_msg
             background_task_info = None
         else:
-            # Get active tasks
-            all_tasks = task_manager.tasks.values()
+            # Get active tasks from database
+            cursor = task_manager.db.conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_id, description, status, workspace
+                FROM tasks
+                WHERE status IN ('pending', 'running')
+            """
+            )
             active_tasks_info = [
-                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
-                for t in all_tasks
-                if t.status in ["pending", "running"]
+                {"task_id": row[0], "description": row[1], "status": row[2], "workspace": row[3]}
+                for row in cursor.fetchall()
             ]
 
             # Ask Claude API with image
@@ -1355,12 +1371,18 @@ async def process_voice_async(
             response = blocking_msg
             background_task_info = None
         else:
-            # Get active tasks
-            all_tasks = task_manager.tasks.values()
+            # Get active tasks from database
+            cursor = task_manager.db.conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_id, description, status, workspace
+                FROM tasks
+                WHERE status IN ('pending', 'running')
+            """
+            )
             active_tasks_info = [
-                {"task_id": t.task_id, "description": t.description, "status": t.status, "workspace": t.workspace}
-                for t in all_tasks
-                if t.status in ["pending", "running"]
+                {"task_id": row[0], "description": row[1], "status": row[2], "workspace": row[3]}
+                for row in cursor.fetchall()
             ]
 
             # Ask Claude via API with VOICE input (be permissive with errors)
@@ -1638,7 +1660,7 @@ def main():
         # Start worker pool FIRST - before any operations that might need it
         logger.info("Starting background worker pool...")
         await agent_pool.start()
-        logger.info(f"Worker pool started with {agent_pool.max_workers} workers")
+        logger.info(f"Agent pool started with {agent_pool.max_agents} agents")
 
         # Check for restart state and notify user
         import json
@@ -1736,18 +1758,21 @@ def main():
         cutoff = now - timedelta(minutes=5)  # Pending > 5 minutes is stuck
         cleaned = 0
 
-        for task in list(task_manager.tasks.values()):
-            if task.status == "pending":
-                created_time = datetime.fromisoformat(task.created_at)
-                if created_time < cutoff:
-                    # Task stuck in pending - mark as failed
-                    task_manager.update_task(
-                        task.task_id,
-                        status="failed",
-                        error="Task stuck in pending state - never submitted to worker pool",
-                    )
-                    cleaned += 1
-                    logger.warning(f"Cleaned stuck pending task {task.task_id} (created {task.created_at})")
+        # Get pending tasks from database
+        cursor = task_manager.db.conn.cursor()
+        cursor.execute("SELECT task_id, created_at FROM tasks WHERE status = 'pending'")
+        for row in cursor.fetchall():
+            task_id, created_at = row
+            created_time = datetime.fromisoformat(created_at)
+            if created_time < cutoff:
+                # Task stuck in pending - mark as failed
+                task_manager.update_task(
+                    task_id,
+                    status="failed",
+                    error="Task stuck in pending state - never submitted to worker pool",
+                )
+                cleaned += 1
+                logger.warning(f"Cleaned stuck pending task {task_id} (created {created_at})")
 
         if cleaned > 0:
             logger.info(f"Cleaned {cleaned} orphaned pending tasks")
