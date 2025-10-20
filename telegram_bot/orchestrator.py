@@ -49,6 +49,7 @@ async def invoke_orchestrator(
     workspace_path: str,
     task_manager=None,  # TaskManager instance for background task creation
     image_path: str | None = None,  # Path to uploaded image
+    session_id: str | None = None,  # Session ID for tracking
 ) -> str | None:
     """
     Invoke orchestrator agent via Claude Code (fire-and-forget pattern).
@@ -188,6 +189,8 @@ User query: {user_query}"""
 
         env = os.environ.copy()
         env["CLAUDE_AGENT_NAME"] = "orchestrator"
+        if session_id:
+            env["SESSION_ID"] = session_id
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
