@@ -57,11 +57,20 @@ try:
     tool_output = str(tool_response)
     has_error = 'error' in tool_output.lower() if tool_output else False
 
+    # Try to detect agent from various sources
+    agent_name = (
+        os.environ.get('CLAUDE_AGENT_NAME') or  # Custom env var (if we set it)
+        input_data.get('agent_name') or  # From Claude Code (if provided)
+        input_data.get('agent') or
+        'unknown'
+    )
+
     timestamp = datetime.utcnow().isoformat() + 'Z'
 
     # Build log entry
     log_entry = {
         'timestamp': timestamp,
+        'agent': agent_name,
         'tool': tool_name,
         'output_length': len(tool_output),
         'has_error': has_error
@@ -111,6 +120,7 @@ try:
             record = {
                 'timestamp': timestamp,
                 'task_id': task_id,
+                'agent': agent_name,
                 'tool_name': tool_name,
                 'duration_ms': None,
                 'success': not has_error,
@@ -171,6 +181,26 @@ except Exception as e:
         f.write(f'\n=== Error at {datetime.utcnow()} ===\n')
         f.write(traceback.format_exc())
         f.write('\n')
+
+# Debug: dump all available data to see what Claude Code provides
+try:
+    with open('/tmp/hook-debug-data.log', 'a') as f:
+        f.write(f'\n===== {datetime.utcnow()} =====\n')
+        f.write('ENV VARS:\n')
+        for k, v in sorted(os.environ.items()):
+            if 'CLAUDE' in k or 'AGENT' in k or 'SESSION' in k:
+                f.write(f'  {k}={v}\n')
+        f.write('\nINPUT_JSON KEYS:\n')
+        f.write(f'  {list(input_data.keys())}\n')
+        f.write('\nFULL INPUT_JSON:\n')
+        f.write(json.dumps(input_data, indent=2))
+        f.write('\n')
+except Exception as e:
+    try:
+        with open('/tmp/hook-debug-errors.log', 'a') as f:
+            f.write(f'{datetime.utcnow()}: {str(e)}\n')
+    except:
+        pass
 
 PYTHON_EOF
 

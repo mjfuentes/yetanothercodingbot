@@ -12,6 +12,7 @@ import tempfile
 from formatter import format_telegram_response
 from pathlib import Path
 
+from agent_pool import AgentPool
 from claude_api import ask_claude
 from claude_interactive import ClaudeSessionPool
 from cost_tracker import CostTracker
@@ -27,7 +28,6 @@ from tasks import Task, TaskManager
 from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from tool_usage_tracker import ToolUsageTracker
-from worker_pool import WorkerPool
 
 # Check if whisper is available
 try:
@@ -77,7 +77,7 @@ claude_pool = ClaudeSessionPool(usage_tracker=tool_usage_tracker)  # No default 
 cost_tracker = CostTracker()  # Track API costs
 rate_limiter = RateLimiter()  # Rate limiting
 queue_manager = MessageQueueManager()  # Message queue per user
-worker_pool = WorkerPool(max_workers=3)  # Bounded worker pool for background tasks
+agent_pool = AgentPool(max_workers=3)  # Bounded worker pool for background tasks
 
 # Log monitoring system
 log_monitor_config = MonitoringConfig(
@@ -424,7 +424,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_task = task_manager.retry_task(task_id)
         if new_task:
             # Submit task to worker pool
-            await worker_pool.submit(execute_code_task, new_task, update, context)
+            await agent_pool.submit(execute_code_task, new_task, update, context)
 
             message = f"Task Retry Started #{new_task.task_id}\n\n"
             message += f"Retrying: {task.description}\n"
@@ -759,7 +759,7 @@ async def execute_code_task(task: "Task", update: Update, context: ContextTypes.
             workspace=Path(task.workspace),
             bot_repo_path=BOT_REPOSITORY,  # Always provide bot context
             model=task.model,
-            agent=task.worker_type,  # Use worker_type as agent name (e.g., 'frontend_worker', 'code_worker')
+            agent=task.agent_type,  # Use agent_type as agent name (e.g., 'frontend_agent', 'code_agent')
             pid_callback=save_pid_immediately,  # Save PID immediately when process starts
             progress_callback=send_progress_update,  # Log activity for status/dashboard
         )
@@ -928,22 +928,22 @@ async def process_message_async(
             task_desc = background_task_info["description"]
             user_message = background_task_info["user_message"]
 
-            # Create background task - ALWAYS use orchestrator (it delegates to sub-workers)
+            # Create background task - ALWAYS use orchestrator (it delegates to sub-agents)
             workspace = current_workspace or WORKSPACE_PATH
             task = task_manager.create_task(
-                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type="orchestrator"
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
 
-            # Submit task to worker pool (non-blocking)
-            logger.info(f"Submitted orchestrator task {task.task_id} to worker pool")
-            await worker_pool.submit(execute_code_task, task, update, context)
+            # Submit task to agent pool (non-blocking)
+            logger.info(f"Submitted orchestrator task {task.task_id} to agent pool")
+            await agent_pool.submit(execute_code_task, task, update, context)
 
             # Send user-facing message
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to worker pool (non-blocking)
-        await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
-        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Queue cost tracking to worker pool (non-blocking)
         # Use actual token counts from API if available, otherwise estimate
@@ -953,7 +953,7 @@ async def process_message_async(
         else:
             input_tokens = cost_tracker.estimate_tokens(message_text)
             output_tokens = cost_tracker.estimate_tokens(response)
-        await worker_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
+        await agent_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1105,15 +1105,15 @@ async def process_document_async(
             user_message = background_task_info["user_message"]
             workspace = current_workspace or WORKSPACE_PATH
             task = task_manager.create_task(
-                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type="orchestrator"
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
             logger.info(f"Submitted orchestrator task {task.task_id} to worker pool (document)")
-            await worker_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to worker pool (non-blocking)
-        await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
-        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1252,15 +1252,15 @@ async def process_photo_async(
             user_message = background_task_info["user_message"]
             workspace = current_workspace or WORKSPACE_PATH
             task = task_manager.create_task(
-                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type="orchestrator"
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
             logger.info(f"Submitted orchestrator task {task.task_id} to worker pool (photo)")
-            await worker_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to worker pool (non-blocking)
-        await worker_pool.submit(_async_add_session_message, user_id, "user", message_text)
-        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1391,15 +1391,15 @@ async def process_voice_async(
             user_message = background_task_info["user_message"]
             workspace = current_workspace or WORKSPACE_PATH
             task = task_manager.create_task(
-                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", worker_type="orchestrator"
+                user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
             logger.info(f"Submitted orchestrator task {task.task_id} to worker pool (voice)")
-            await worker_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to worker pool (non-blocking)
-        await worker_pool.submit(_async_add_session_message, user_id, "user", transcription)
-        await worker_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", transcription)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1606,7 +1606,7 @@ def main():
         logger.info(f"Marked {stopped_count} tasks as stopped")
 
         logger.info("Stopping worker pool...")
-        await worker_pool.stop()
+        await agent_pool.stop()
         logger.info("Worker pool stopped")
 
         logger.info("Cleaning up message queues...")
@@ -1635,8 +1635,8 @@ def main():
 
         # Start worker pool FIRST - before any operations that might need it
         logger.info("Starting background worker pool...")
-        await worker_pool.start()
-        logger.info(f"Worker pool started with {worker_pool.max_workers} workers")
+        await agent_pool.start()
+        logger.info(f"Worker pool started with {agent_pool.max_workers} workers")
 
         # Check for restart state and notify user
         import json

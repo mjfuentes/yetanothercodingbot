@@ -3,7 +3,7 @@ Orchestrator agent integration for Telegram bot
 
 Proper separation of concerns:
 - Orchestrator: Handles routing, user responses, simple queries via Task tool
-- code_worker: Spawned by orchestrator for all file operations and code changes
+- code_agent: Spawned by orchestrator for all file operations and code changes
 """
 
 import asyncio
@@ -103,7 +103,7 @@ async def invoke_orchestrator(
     if image_path:
         context["image_path"] = image_path
 
-    # Format prompt - orchestrator now handles routing and spawns code_worker for coding tasks
+    # Format prompt - orchestrator now handles routing and spawns code_agent for coding tasks
     prompt = f"""CONTEXT:
 {json.dumps(context, indent=2)}
 
@@ -182,12 +182,20 @@ User query: {user_query}"""
 
         # Run from bot_repository to load orchestrator agent config from .claude/agents/
         # Orchestrator can still access other repos using absolute paths via Glob/Grep/Read tools
+
+        # Set environment variables for hooks
+        import os
+
+        env = os.environ.copy()
+        env["CLAUDE_AGENT_NAME"] = "orchestrator"
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=bot_repository,  # Run from bot repo to load .claude/agents/orchestrator.md
+            env=env,  # Pass env vars for hook tracking
             start_new_session=True,  # Detach from parent process (fire-and-forget)
         )
 

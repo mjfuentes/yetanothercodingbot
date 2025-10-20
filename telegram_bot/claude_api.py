@@ -276,27 +276,21 @@ For "check logs"/"show logs"/"?":
 <background_task_format>
 Return pipe-delimited, single line, NO markdown blocks, NO extra text:
 
-Default: BACKGROUND_TASK|<task_description>|<user_message>
-With worker: BACKGROUND_TASK|<worker_type>|<task_description>|<user_message>
-
-Workers:
-• code_worker (default): Backend, scripts, APIs, general coding
-• frontend_worker: Web UI/UX, HTML/CSS/JS, design, websites
-
-Frontend triggers: website, web page, landing page, portfolio, UI, UX, design, styling, layout, responsive, HTML, CSS, JavaScript, gallery, navigation, header, footer, button, form
+Format: BACKGROUND_TASK|<task_description>|<user_message>
 
 Rules:
 • No markdown wrapping (no ```)
 • No explanation before/after
 • Only the BACKGROUND_TASK line
-• user_message = action-oriented (shown immediately)
+• user_message = action-oriented (shown immediately to user)
+• task_description = what needs to be done (used internally)
 </background_task_format>
 
 <examples>
 GOOD:
 • "fix bug in main.py" → BACKGROUND_TASK|Fix bug in main.py|Fixing the bug.
-• "build landing page" → BACKGROUND_TASK|frontend_worker|Build landing page|Creating a responsive landing page.
-• "update gallery" → BACKGROUND_TASK|frontend_worker|Update website gallery|Updating gallery.
+• "build landing page" → BACKGROUND_TASK|Build landing page|Creating a responsive landing page.
+• "update gallery" → BACKGROUND_TASK|Update website gallery|Updating gallery.
 • "check code" → BACKGROUND_TASK|Analyze codebase for improvements|Scanning the code.
 • "what is asyncio?" → [Direct answer about asyncio]
 • "check logs" → [Direct log summary from context]
@@ -457,29 +451,20 @@ current_workspace: {safe_workspace}
 
             if task_line:
                 # Parse the BACKGROUND_TASK line
-                # Supports two formats:
-                # 1. BACKGROUND_TASK|task_description|user_message (default: code_worker)
-                # 2. BACKGROUND_TASK|worker_type|task_description|user_message (specify worker)
+                # Format: BACKGROUND_TASK|task_description|user_message
                 parts = task_line.split("|")
 
-                if len(parts) == 4:
-                    # New format with worker type specified
-                    _, worker_type, task_description, user_message = parts
-                    background_task = {
-                        "worker_type": worker_type.strip(),
-                        "description": task_description.strip(),
-                        "user_message": user_message.strip(),
-                    }
-                    return task_line, background_task, usage_info
-                elif len(parts) == 3:
-                    # Legacy format - defaults to code_worker
+                if len(parts) == 3:
                     _, task_description, user_message = parts
                     background_task = {
-                        "worker_type": "code_worker",  # Default worker
                         "description": task_description.strip(),
                         "user_message": user_message.strip(),
                     }
                     return task_line, background_task, usage_info
+                else:
+                    logger.warning(f"Invalid BACKGROUND_TASK format: {task_line}")
+                    # Treat as direct answer if format is invalid
+                    pass
 
         # Direct answer
         return response_text, None, usage_info

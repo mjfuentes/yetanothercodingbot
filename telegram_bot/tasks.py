@@ -39,7 +39,7 @@ class Task:
     updated_at: str
     model: str  # 'haiku', 'sonnet'
     workspace: str  # Repository/workspace path
-    worker_type: str = "code_worker"  # 'code_worker', 'frontend_worker', 'research_worker', etc.
+    agent_type: str = "code_agent"  # 'code_agent', 'frontend_agent', 'research_agent', etc.
     result: str | None = None
     error: str | None = None
     pid: int | None = None  # Process ID for running tasks
@@ -53,9 +53,9 @@ class Task:
         # Ensure activity_log exists (for backwards compatibility)
         if "activity_log" not in data:
             data["activity_log"] = []
-        # Ensure worker_type exists (for backwards compatibility with old tasks)
-        if "worker_type" not in data:
-            data["worker_type"] = "code_worker"
+        # Ensure agent_type exists (for backwards compatibility with old tasks)
+        if "agent_type" not in data:
+            data["agent_type"] = "code_agent"
         return cls(**data)
 
     def add_activity(self, message: str, output_lines: int | None = None):
@@ -159,7 +159,7 @@ class TaskManager:
             logger.error(f"Error saving tasks: {e}")
 
     def create_task(
-        self, user_id: int, description: str, workspace: str, model: str = "sonnet", worker_type: str = "code_worker"
+        self, user_id: int, description: str, workspace: str, model: str = "sonnet", agent_type: str = "code_agent"
     ) -> Task:
         """Create a new task"""
         now = datetime.now().isoformat()
@@ -174,13 +174,13 @@ class TaskManager:
             updated_at=now,
             model=model,
             workspace=workspace,
-            worker_type=worker_type,
+            agent_type=agent_type,
         )
 
         self.tasks[task_id] = task
         self._save_tasks()
 
-        logger.info(f"Created {worker_type} task {task_id} for user {user_id} in {workspace}: {description}")
+        logger.info(f"Created {agent_type} task {task_id} for user {user_id} in {workspace}: {description}")
         return task
 
     def update_task(
@@ -270,7 +270,7 @@ class TaskManager:
             description=original_task.description,
             workspace=original_task.workspace,
             model=original_task.model,
-            worker_type=original_task.worker_type,
+            agent_type=original_task.agent_type,
         )
 
         logger.info(f"Created retry task {new_task.task_id} for {original_task.status} task {task_id}")
@@ -470,7 +470,7 @@ class TaskManager:
                 description=stopped_task.description,
                 workspace=stopped_task.workspace,
                 model=stopped_task.model,
-                worker_type=stopped_task.worker_type,
+                agent_type=stopped_task.agent_type,
             )
             new_tasks.append(new_task)
             logger.info(f"Auto-retrying stopped task {stopped_task.task_id} as {new_task.task_id}")

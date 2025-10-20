@@ -450,7 +450,7 @@ class ClaudeSessionPool:
         """Execute a task using session pool
 
         Args:
-            agent: Optional agent name to use (e.g., 'frontend_worker', 'code_worker')
+            agent: Optional agent name to use (e.g., 'frontend_agent', 'code_agent')
             pid_callback: Optional callback function called with PID when process starts
                          Format: pid_callback(pid: int)
             progress_callback: Optional callback for progress updates
