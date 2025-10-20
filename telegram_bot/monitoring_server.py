@@ -733,6 +733,71 @@ def get_doc_content():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/docs/archive", methods=["POST"])
+def archive_doc():
+    """Archive a documentation file by moving it to the archive folder"""
+    try:
+        data = request.get_json()
+        doc_path = data.get("path")
+
+        if not doc_path:
+            return jsonify({"error": "Missing path parameter"}), 400
+
+        # Determine docs directory based on where we're running from
+        if Path.cwd().name == "telegram_bot":
+            docs_dir = Path("../docs")
+        else:
+            docs_dir = Path("docs")
+
+        # Security: Prevent directory traversal
+        source_path = (docs_dir / doc_path).resolve()
+        if not source_path.is_relative_to(docs_dir.resolve()):
+            return jsonify({"error": "Invalid path"}), 403
+
+        if not source_path.exists():
+            return jsonify({"error": "File not found"}), 404
+
+        # Check if already in archive
+        if "archive" in str(source_path):
+            return jsonify({"error": "File is already archived"}), 400
+
+        # Create archive directory if it doesn't exist
+        archive_dir = docs_dir / "archive"
+        archive_dir.mkdir(exist_ok=True)
+
+        # Determine destination path
+        dest_path = archive_dir / source_path.name
+
+        # Handle name conflicts by appending a number
+        counter = 1
+        original_dest = dest_path
+        while dest_path.exists():
+            stem = original_dest.stem
+            suffix = original_dest.suffix
+            dest_path = archive_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+        # Move the file
+        import shutil
+
+        shutil.move(str(source_path), str(dest_path))
+
+        logger.info(f"Archived document: {source_path} -> {dest_path}")
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Document archived successfully",
+                "old_path": str(doc_path),
+                "new_path": str(dest_path.relative_to(docs_dir)),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error archiving documentation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health")
 def health_check():
     """Health check endpoint"""

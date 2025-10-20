@@ -168,6 +168,42 @@
             margin: 1.5rem 0;
         }
 
+        /* Archive button */
+        .archive-btn {
+            background: var(--bg-tertiary);
+            border: 1.5px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .archive-btn:hover {
+            background: var(--accent-yellow);
+            border-color: var(--accent-yellow);
+            color: white;
+        }
+
+        .archive-btn:active {
+            transform: scale(0.95);
+        }
+
+        .doc-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .doc-item-content {
+            flex: 1;
+            cursor: pointer;
+        }
+
         body {
             font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
             background: var(--bg-primary);
@@ -1805,15 +1841,22 @@
             list.innerHTML = '<div class="tool-list">' + paginatedDocs.map(doc => {
                 const sizeKB = (doc.size / 1024).toFixed(1);
                 const modified = new Date(doc.modified * 1000).toLocaleString();
+                const isArchive = doc.is_archive;
+                const showArchiveBtn = !isArchive && currentDocsFilter !== 'archive';
 
                 return `
-                    <div class="tool-item" onclick="showDocContent('${escapeHtml(doc.path)}')" style="cursor: pointer;">
-                        <div style="flex: 1;">
+                    <div class="tool-item doc-item">
+                        <div class="doc-item-content" onclick="showDocContent('${escapeHtml(doc.path)}')">
                             <div class="tool-name">${escapeHtml(doc.name)}</div>
                             <div class="tool-stats">${escapeHtml(doc.path)} • ${sizeKB} KB</div>
                             <div class="tool-stats" style="font-size: 0.7rem; margin-top: 0.25rem;">Modified: ${modified}</div>
                         </div>
-                        <div style="color: var(--accent-blue); font-size: 1.25rem;">→</div>
+                        ${showArchiveBtn ? `
+                            <button class="archive-btn" onclick="event.stopPropagation(); archiveDocument('${escapeHtml(doc.path)}', '${escapeHtml(doc.name)}')">
+                                📦 Archive
+                            </button>
+                        ` : ''}
+                        <div style="color: var(--accent-blue); font-size: 1.25rem; cursor: pointer;" onclick="showDocContent('${escapeHtml(doc.path)}')">→</div>
                     </div>
                 `;
             }).join('') + '</div>';
@@ -1862,6 +1905,38 @@
 
         function closeDocModal() {
             document.getElementById('docModal').classList.remove('active');
+        }
+
+        async function archiveDocument(path, name) {
+            if (!confirm(`Are you sure you want to archive "${name}"?\n\nThis will move the document to the archive folder.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/docs/archive', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ path: path })
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    // Show success message
+                    alert(`Document "${name}" has been archived successfully!`);
+                    
+                    // Reload the documentation list
+                    await loadDocumentation();
+                    renderDocsList();
+                } else {
+                    alert(`Error: ${result.error || 'Failed to archive document'}`);
+                }
+            } catch (error) {
+                console.error('Error archiving document:', error);
+                alert('Error archiving document. Please try again.');
+            }
         }
 
         // Close doc modal on background click
