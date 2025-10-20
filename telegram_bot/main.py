@@ -12,7 +12,7 @@ import tempfile
 from formatter import format_telegram_response
 from pathlib import Path
 
-from agent_pool import AgentPool
+from agent_pool import AgentPool, TaskPriority
 from claude_api import ask_claude
 from claude_interactive import ClaudeSessionPool
 from cost_tracker import CostTracker
@@ -423,8 +423,8 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Retry the task
         new_task = task_manager.retry_task(task_id)
         if new_task:
-            # Submit task to worker pool
-            await agent_pool.submit(execute_code_task, new_task, update, context)
+            # Submit task to worker pool (HIGH priority - user retry request)
+            await agent_pool.submit(execute_code_task, new_task, update, context, priority=TaskPriority.HIGH)
 
             message = f"Task Retry Started #{new_task.task_id}\n\n"
             message += f"Retrying: {task.description}\n"
@@ -934,16 +934,16 @@ async def process_message_async(
                 user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
 
-            # Submit task to agent pool (non-blocking)
+            # Submit task to agent pool (non-blocking, HIGH priority - user request)
             logger.info(f"Submitted orchestrator task {task.task_id} to agent pool")
-            await agent_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context, priority=TaskPriority.HIGH)
 
             # Send user-facing message
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to agent pool (non-blocking)
-        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text)
-        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking, LOW priority - not urgent)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text, priority=TaskPriority.LOW)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response, priority=TaskPriority.LOW)
 
         # Queue cost tracking to worker pool (non-blocking)
         # Use actual token counts from API if available, otherwise estimate
@@ -953,7 +953,9 @@ async def process_message_async(
         else:
             input_tokens = cost_tracker.estimate_tokens(message_text)
             output_tokens = cost_tracker.estimate_tokens(response)
-        await agent_pool.submit(_async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat")
+        await agent_pool.submit(
+            _async_record_usage, user_id, "haiku", input_tokens, output_tokens, "chat", priority=TaskPriority.LOW
+        )
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1108,12 +1110,12 @@ async def process_document_async(
                 user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
             logger.info(f"Submitted orchestrator task {task.task_id} to worker pool (document)")
-            await agent_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context, priority=TaskPriority.HIGH)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to agent pool (non-blocking)
-        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text)
-        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking, LOW priority - not urgent)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text, priority=TaskPriority.LOW)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response, priority=TaskPriority.LOW)
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1255,12 +1257,12 @@ async def process_photo_async(
                 user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
             logger.info(f"Submitted orchestrator task {task.task_id} to worker pool (photo)")
-            await agent_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context, priority=TaskPriority.HIGH)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to agent pool (non-blocking)
-        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text)
-        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking, LOW priority - not urgent)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", message_text, priority=TaskPriority.LOW)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response, priority=TaskPriority.LOW)
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))
@@ -1394,12 +1396,12 @@ async def process_voice_async(
                 user_id=user_id, description=task_desc, workspace=workspace, model="sonnet", agent_type="orchestrator"
             )
             logger.info(f"Submitted orchestrator task {task.task_id} to worker pool (voice)")
-            await agent_pool.submit(execute_code_task, task, update, context)
+            await agent_pool.submit(execute_code_task, task, update, context, priority=TaskPriority.HIGH)
             response = f"Task #{task.task_id} started.\n\n{user_message}"
 
-        # Queue session writes to agent pool (non-blocking)
-        await agent_pool.submit(_async_add_session_message, user_id, "user", transcription)
-        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response)
+        # Queue session writes to agent pool (non-blocking, LOW priority - not urgent)
+        await agent_pool.submit(_async_add_session_message, user_id, "user", transcription, priority=TaskPriority.LOW)
+        await agent_pool.submit(_async_add_session_message, user_id, "assistant", response, priority=TaskPriority.LOW)
 
         # Format and send response to user (uses helper that handles document attachment)
         await send_formatted_response(context, user_id, response, workspace_path=session_manager.get_workspace(user_id))

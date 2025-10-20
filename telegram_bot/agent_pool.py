@@ -3,17 +3,35 @@ Bounded agent pool for background task execution.
 
 Prevents blocking by managing a fixed number of concurrent agents,
 queuing excess tasks for processing when agents become available.
+
+Supports priority-based task execution with four priority levels:
+URGENT (0), HIGH (1), NORMAL (2), LOW (3)
 """
 
 import asyncio
 import logging
 from collections.abc import Callable
+from enum import IntEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Sentinel object to signal agent shutdown
 _SENTINEL = object()
+
+
+class TaskPriority(IntEnum):
+    """
+    Task priority levels for the agent pool.
+
+    Lower numeric values = higher priority.
+    Tasks are processed in priority order, with URGENT tasks first.
+    """
+
+    URGENT = 0  # User-facing errors, critical failures
+    HIGH = 1  # User requests, interactive tasks
+    NORMAL = 2  # Background tasks, routine operations (default)
+    LOW = 3  # Maintenance, cleanup, analytics
 
 
 class AgentPool:
@@ -33,11 +51,12 @@ class AgentPool:
             max_agents: Maximum number of concurrent agents (default 3)
         """
         self.max_agents = max_agents
-        self.task_queue: asyncio.Queue = asyncio.Queue()
+        self.task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self.agents: list[asyncio.Task] = []
         self.active_tasks = 0
         self._lock = asyncio.Lock()
         self._started = False
+        self._task_counter = 0  # For FIFO ordering within same priority
 
     async def start(self) -> None:
         """Start the agent pool by spawning agent coroutines."""
@@ -76,7 +95,9 @@ class AgentPool:
         self.agents.clear()
         self._started = False
 
-    async def submit(self, task_func: Callable, *args: Any, **kwargs: Any) -> None:
+    async def submit(
+        self, task_func: Callable, *args: Any, priority: TaskPriority = TaskPriority.NORMAL, **kwargs: Any
+    ) -> None:
         """
         Submit a task for execution in the agent pool.
 
@@ -85,14 +106,26 @@ class AgentPool:
         Args:
             task_func: Async callable to execute
             *args: Positional arguments for task_func
+            priority: Task priority level (default: NORMAL)
             **kwargs: Keyword arguments for task_func
         """
         if not self._started:
             raise RuntimeError("Agent pool not started")
 
-        # Queue the task (non-blocking)
-        await self.task_queue.put((task_func, args, kwargs))
-        logger.debug(f"Task submitted to agent pool (queue size: {self.task_queue.qsize()})")
+        # Use counter for FIFO ordering within same priority
+        async with self._lock:
+            counter = self._task_counter
+            self._task_counter += 1
+
+        # Priority queue format: (priority, counter, (task_func, args, kwargs))
+        # Lower priority number = processed first
+        # Counter ensures FIFO for same priority
+        await self.task_queue.put((priority, counter, (task_func, args, kwargs)))
+
+        logger.debug(
+            f"Task {task_func.__name__} submitted to agent pool "
+            f"(priority: {priority.name}, queue size: {self.task_queue.qsize()})"
+        )
 
     async def _agent(self, agent_id: int) -> None:
         """
@@ -106,7 +139,7 @@ class AgentPool:
         try:
             while True:
                 try:
-                    # Get next task from queue
+                    # Get next task from queue (priority-ordered)
                     item = await self.task_queue.get()
 
                     # Check for shutdown signal
@@ -114,8 +147,9 @@ class AgentPool:
                         logger.info(f"Agent {agent_id} received shutdown signal")
                         break
 
-                    # Unpack task
-                    task_func, args, kwargs = item
+                    # Unpack priority queue item: (priority, counter, (task_func, args, kwargs))
+                    priority, counter, task_data = item
+                    task_func, args, kwargs = task_data
 
                     # Execute task
                     try:
@@ -123,7 +157,8 @@ class AgentPool:
                             self.active_tasks += 1
 
                         logger.debug(
-                            f"Agent {agent_id} executing {task_func.__name__} " f"({self.active_tasks} active)"
+                            f"Agent {agent_id} executing {task_func.__name__} "
+                            f"(priority: {TaskPriority(priority).name}, active: {self.active_tasks})"
                         )
 
                         # Run the task
