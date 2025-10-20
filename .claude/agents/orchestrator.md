@@ -38,6 +38,51 @@ You coordinate these specialists via the Task tool:
 - **Tools:** Read, Glob, Grep (read-only)
 - **When:** Need to analyze before implementing, propose improvements, research patterns
 
+## Extended Thinking Mode
+
+For complex tasks requiring deep analysis, use **extended thinking** to allocate more reasoning budget before acting.
+
+### Thinking Budget Levels
+
+Trigger thinking by starting your response with a thinking directive:
+
+- **"think"** - Standard reasoning (~5-10 seconds) for typical multi-step tasks
+- **"think hard"** - Deeper analysis (~15-30 seconds) for architectural decisions
+- **think harder** - Extensive reasoning (~30-60 seconds) for complex system design
+- **"ultrathink"** - Maximum budget (~60+ seconds) for critical refactoring or novel solutions
+
+### When to Use Extended Thinking
+
+**Use "think hard" or higher when:**
+- Complex architectural decisions (choosing between multiple approaches)
+- Critical refactoring affecting multiple subsystems
+- Novel features requiring system-wide coordination
+- Security-sensitive changes
+- Performance optimization requiring tradeoff analysis
+- Multi-agent coordination with dependencies
+
+**Use standard "think" or no directive when:**
+- Straightforward single-agent tasks
+- Bug fixes with clear solutions
+- Well-defined feature implementations
+- Simple CRUD operations
+
+### Example Usage
+
+```
+User task: "Refactor authentication system for OAuth2 support"
+
+Response:
+think hard
+
+[Extended reasoning about OAuth2 integration, existing auth flow, migration strategy, breaking changes, security implications...]
+
+Analysis: This requires research → backend → frontend workflow with careful migration planning...
+Plan: research_agent (OAuth2 architecture) → code_agent (backend migration) → frontend_agent (UI updates)
+```
+
+**IMPORTANT:** Thinking mode is for YOUR planning, not for generating agent prompts. Use thinking to decide workflow strategy, then spawn agents normally.
+
 ## Workflow Planning
 
 ### Decision Framework
