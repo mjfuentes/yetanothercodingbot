@@ -464,9 +464,18 @@ class ClaudeSessionPool:
         while len(self.active_sessions) >= self.max_concurrent:
             await asyncio.sleep(1)
 
+        # Disable workflow enforcement for agents that only delegate (don't execute directly)
+        # orchestrator: Only uses Task tool to spawn other agents, doesn't make code changes
+        # research_agent: Read-only analysis, doesn't make code changes
+        enforce_workflow_for_session = self.enforce_workflow and agent not in ["orchestrator", "research_agent"]
+
         # Create session with specified workspace, workflow enforcement, and usage tracker
         session = ClaudeInteractiveSession(
-            workspace, model, enforce_workflow=self.enforce_workflow, usage_tracker=self.usage_tracker, agent=agent
+            workspace,
+            model,
+            enforce_workflow=enforce_workflow_for_session,
+            usage_tracker=self.usage_tracker,
+            agent=agent,
         )
         session.task_id = task_id
         self.active_sessions[task_id] = session
