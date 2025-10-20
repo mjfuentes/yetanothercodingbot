@@ -844,6 +844,7 @@
             <button class="tab active" onclick="switchTab('overview')">Overview</button>
             <button class="tab" onclick="switchTab('activity')">Recent Activity</button>
             <button class="tab" onclick="switchTab('tools')">Tools</button>
+            <button class="tab" onclick="switchTab('docs')">Documentation</button>
         </div>
 
         <div id="overviewTab" class="tab-content active">
@@ -881,6 +882,15 @@
 
         <div id="toolsTab" class="tab-content">
             <div class="tool-list" id="toolsList"></div>
+        </div>
+
+        <div id="docsTab" class="tab-content">
+            <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button class="btn" id="showAllDocs" onclick="filterDocs('all')">All Docs</button>
+                <button class="btn active" id="showActiveDocs" onclick="filterDocs('active')">Active</button>
+                <button class="btn" id="showArchiveDocs" onclick="filterDocs('archive')">Archive</button>
+            </div>
+            <div id="docsList"></div>
         </div>
     </div>
 
@@ -926,6 +936,24 @@
         </div>
     </div>
 
+    <!-- DOCUMENTATION MODAL -->
+    <div class="modal" id="docModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title" id="docModalTitle">Documentation</div>
+                    <div class="modal-subtitle" id="docModalSubtitle"></div>
+                </div>
+                <button class="modal-close" onclick="closeDocModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="docContent" style="font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Monaco, 'Courier New', monospace; font-size: 0.875rem; line-height: 1.6; white-space: pre-wrap; overflow-x: auto;">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentTimeRange = 24;
         let eventSource = null;
@@ -942,6 +970,8 @@
         let pageSize = 20;
         let totalPages = 1;
         let preventAutoRefetch = false; // Prevent SSE from refetching tasks
+        let allDocs = [];
+        let currentDocsFilter = 'active';
 
         document.addEventListener('DOMContentLoaded', () => {
             // Force dark theme
@@ -1509,6 +1539,11 @@
                 content.classList.remove('active');
             });
             document.getElementById(`${tabName}Tab`).classList.add('active');
+
+            // Load docs when switching to docs tab
+            if (tabName === 'docs' && allDocs.length === 0) {
+                loadDocumentation();
+            }
         }
 
         function formatStatus(status) {
@@ -1554,6 +1589,113 @@
             if (e.key === 'Escape') {
                 closeTaskModal();
                 closeErrorsModal();
+                closeDocModal();
+            }
+        });
+
+        // Documentation functions
+        async function loadDocumentation() {
+            try {
+                const response = await fetch('/api/docs/list');
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('docsList').innerHTML = `<div class="no-data">Error: ${data.error}</div>`;
+                    return;
+                }
+
+                allDocs = data.files || [];
+                renderDocsList();
+            } catch (error) {
+                console.error('Error loading documentation:', error);
+                document.getElementById('docsList').innerHTML = '<div class="no-data">Error loading documentation</div>';
+            }
+        }
+
+        function filterDocs(filter) {
+            currentDocsFilter = filter;
+
+            // Update button states
+            document.getElementById('showAllDocs').classList.toggle('active', filter === 'all');
+            document.getElementById('showActiveDocs').classList.toggle('active', filter === 'active');
+            document.getElementById('showArchiveDocs').classList.toggle('active', filter === 'archive');
+
+            renderDocsList();
+        }
+
+        function renderDocsList() {
+            const list = document.getElementById('docsList');
+
+            if (!allDocs || allDocs.length === 0) {
+                list.innerHTML = '<div class="no-data">No documentation files found</div>';
+                return;
+            }
+
+            // Filter docs based on current filter
+            let filteredDocs = allDocs;
+            if (currentDocsFilter === 'active') {
+                filteredDocs = allDocs.filter(doc => !doc.is_archive);
+            } else if (currentDocsFilter === 'archive') {
+                filteredDocs = allDocs.filter(doc => doc.is_archive);
+            }
+
+            if (filteredDocs.length === 0) {
+                list.innerHTML = `<div class="no-data">No ${currentDocsFilter} documentation files</div>`;
+                return;
+            }
+
+            list.innerHTML = '<div class="tool-list">' + filteredDocs.map(doc => {
+                const sizeKB = (doc.size / 1024).toFixed(1);
+                const modified = new Date(doc.modified * 1000).toLocaleString();
+
+                return `
+                    <div class="tool-item" onclick="showDocContent('${escapeHtml(doc.path)}')" style="cursor: pointer;">
+                        <div style="flex: 1;">
+                            <div class="tool-name">${escapeHtml(doc.name)}</div>
+                            <div class="tool-stats">${escapeHtml(doc.path)} • ${sizeKB} KB</div>
+                            <div class="tool-stats" style="font-size: 0.7rem; margin-top: 0.25rem;">Modified: ${modified}</div>
+                        </div>
+                        <div style="color: var(--accent-blue); font-size: 1.25rem;">→</div>
+                    </div>
+                `;
+            }).join('') + '</div>';
+        }
+
+        async function showDocContent(path) {
+            const modal = document.getElementById('docModal');
+            modal.classList.add('active');
+
+            document.getElementById('docModalTitle').textContent = path.split('/').pop();
+            document.getElementById('docModalSubtitle').textContent = path;
+            document.getElementById('docContent').innerHTML = '<div class="no-data">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/docs/content?path=${encodeURIComponent(path)}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('docContent').innerHTML = `<div class="no-data">Error: ${data.error}</div>`;
+                    return;
+                }
+
+                // Display content with basic markdown-style formatting
+                const content = data.content;
+                document.getElementById('docContent').textContent = content;
+
+            } catch (error) {
+                console.error('Error loading document content:', error);
+                document.getElementById('docContent').innerHTML = '<div class="no-data">Error loading document</div>';
+            }
+        }
+
+        function closeDocModal() {
+            document.getElementById('docModal').classList.remove('active');
+        }
+
+        // Close doc modal on background click
+        document.getElementById('docModal').addEventListener('click', (e) => {
+            if (e.target.id === 'docModal') {
+                closeDocModal();
             }
         });
     </script>

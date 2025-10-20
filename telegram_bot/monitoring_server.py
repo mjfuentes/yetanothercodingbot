@@ -652,6 +652,87 @@ def task_detail(task_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/docs/list")
+def list_docs():
+    """Get list of all documentation files"""
+    try:
+        # Determine docs directory based on where we're running from
+        if Path.cwd().name == "telegram_bot":
+            docs_dir = Path("../docs")
+        else:
+            docs_dir = Path("docs")
+
+        if not docs_dir.exists():
+            return jsonify({"error": "Documentation directory not found"}), 404
+
+        # Recursively find all markdown and text files
+        doc_files = []
+        for ext in ["*.md", "*.txt"]:
+            doc_files.extend(docs_dir.rglob(ext))
+
+        # Build file tree structure
+        files = []
+        for file_path in sorted(doc_files):
+            relative_path = file_path.relative_to(docs_dir)
+            stat = file_path.stat()
+
+            files.append(
+                {
+                    "path": str(relative_path),
+                    "name": file_path.name,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "is_archive": "archive" in str(relative_path),
+                }
+            )
+
+        return jsonify({"files": files, "total": len(files)})
+
+    except Exception as e:
+        logger.error(f"Error listing documentation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/docs/content")
+def get_doc_content():
+    """Get content of a specific documentation file"""
+    try:
+        doc_path = request.args.get("path")
+        if not doc_path:
+            return jsonify({"error": "Missing path parameter"}), 400
+
+        # Determine docs directory based on where we're running from
+        if Path.cwd().name == "telegram_bot":
+            docs_dir = Path("../docs")
+        else:
+            docs_dir = Path("docs")
+
+        # Security: Prevent directory traversal
+        file_path = (docs_dir / doc_path).resolve()
+        if not file_path.is_relative_to(docs_dir.resolve()):
+            return jsonify({"error": "Invalid path"}), 403
+
+        if not file_path.exists():
+            return jsonify({"error": "File not found"}), 404
+
+        # Read file content
+        with open(file_path, encoding="utf-8") as f:
+            content = f.read()
+
+        return jsonify(
+            {
+                "path": str(doc_path),
+                "name": file_path.name,
+                "content": content,
+                "size": file_path.stat().st_size,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error reading documentation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health")
 def health_check():
     """Health check endpoint"""
