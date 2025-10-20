@@ -210,33 +210,47 @@ def task_tool_usage(task_id):
 def task_activity():
     """Get recent task activity for live feed"""
     try:
-        # Reload tasks to get latest state
-        task_manager.reload_tasks()
-
         limit = int(request.args.get("limit", 50))
         user_id = request.args.get("user_id")  # Optional filter by user
 
-        # Get all tasks or filter by user
-        all_tasks = []
-        for task in task_manager.tasks.values():
-            if user_id and task.user_id != int(user_id):
-                continue
-            all_tasks.append(task)
-
-        # Sort by updated_at (most recent first)
-        all_tasks.sort(key=lambda t: t.updated_at, reverse=True)
+        # Get tasks from database
+        cursor = task_manager.db.conn.cursor()
+        if user_id:
+            cursor.execute(
+                """
+                SELECT task_id, description, status, activity_log, updated_at
+                FROM tasks
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """,
+                (int(user_id), limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT task_id, description, status, activity_log, updated_at
+                FROM tasks
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """,
+                (limit,),
+            )
 
         # Build activity feed from task activity logs
         activity_feed = []
-        for task in all_tasks[:limit]:
+        for row in cursor.fetchall():
+            task_id, description, status, activity_log_json, updated_at = row
+            activity_log = json.loads(activity_log_json) if activity_log_json else []
+
             # Add each activity entry
-            if task.activity_log:
-                for activity in reversed(task.activity_log[-10:]):  # Last 10 per task
+            if activity_log:
+                for activity in reversed(activity_log[-10:]):  # Last 10 per task
                     activity_feed.append(
                         {
-                            "task_id": task.task_id,
-                            "description": task.description[:50],
-                            "status": task.status,
+                            "task_id": task_id,
+                            "description": description[:50],
+                            "status": status,
                             "timestamp": activity["timestamp"],
                             "message": activity["message"],
                             "output_lines": activity.get("output_lines"),
@@ -397,33 +411,39 @@ def running_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
-        # Reload tasks from disk to get latest state
-        task_manager.reload_tasks()
+        # Get tasks with status 'running' or 'pending' from database
+        cursor = task_manager.db.conn.cursor()
+        cursor.execute(
+            """
+            SELECT task_id, description, status, agent_type, model, created_at, updated_at, activity_log
+            FROM tasks
+            WHERE status IN ('running', 'pending')
+            ORDER BY created_at DESC
+        """
+        )
 
-        # Get tasks with status 'running' or 'pending'
         running = []
-        for task in task_manager.tasks.values():
-            if task.status in ["running", "pending"]:
-                # Get latest activity message
-                latest_activity = None
-                if task.activity_log and len(task.activity_log) > 0:
-                    latest_activity = task.activity_log[-1]["message"]
+        for row in cursor.fetchall():
+            task_id, description, status, agent_type, model, created_at, updated_at, activity_log_json = row
+            activity_log = json.loads(activity_log_json) if activity_log_json else []
 
-                running.append(
-                    {
-                        "task_id": task.task_id,
-                        "description": task.description,
-                        "status": task.status,
-                        "worker_type": task.worker_type,
-                        "model": task.model,
-                        "created_at": task.created_at,
-                        "updated_at": task.updated_at,
-                        "latest_activity": latest_activity,
-                    }
-                )
+            # Get latest activity message
+            latest_activity = None
+            if activity_log and len(activity_log) > 0:
+                latest_activity = activity_log[-1]["message"]
 
-        # Sort by updated_at (most recent first)
-        running.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+            running.append(
+                {
+                    "task_id": task_id,
+                    "description": description,
+                    "status": status,
+                    "worker_type": agent_type,  # Keep old name for compatibility
+                    "model": model,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "latest_activity": latest_activity,
+                }
+            )
 
         # Apply pagination
         total = len(running)
@@ -445,30 +465,38 @@ def completed_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
-        task_manager.reload_tasks()
+        # Get completed tasks from database
+        cursor = task_manager.db.conn.cursor()
+        cursor.execute(
+            """
+            SELECT task_id, description, status, agent_type, model, created_at, updated_at, activity_log
+            FROM tasks
+            WHERE status = 'completed'
+            ORDER BY updated_at DESC
+        """
+        )
 
         completed = []
-        for task in task_manager.tasks.values():
-            if task.status == "completed":
-                latest_activity = None
-                if task.activity_log and len(task.activity_log) > 0:
-                    latest_activity = task.activity_log[-1]["message"]
+        for row in cursor.fetchall():
+            task_id, description, status, agent_type, model, created_at, updated_at, activity_log_json = row
+            activity_log = json.loads(activity_log_json) if activity_log_json else []
 
-                completed.append(
-                    {
-                        "task_id": task.task_id,
-                        "description": task.description,
-                        "status": task.status,
-                        "worker_type": task.worker_type,
-                        "model": task.model,
-                        "created_at": task.created_at,
-                        "updated_at": task.updated_at,
-                        "latest_activity": latest_activity,
-                    }
-                )
+            latest_activity = None
+            if activity_log and len(activity_log) > 0:
+                latest_activity = activity_log[-1]["message"]
 
-        # Sort by updated_at (most recent first)
-        completed.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+            completed.append(
+                {
+                    "task_id": task_id,
+                    "description": description,
+                    "status": status,
+                    "worker_type": agent_type,
+                    "model": model,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "latest_activity": latest_activity,
+                }
+            )
 
         # Apply pagination
         total = len(completed)
@@ -490,30 +518,38 @@ def failed_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
-        task_manager.reload_tasks()
+        # Get failed/stopped tasks from database
+        cursor = task_manager.db.conn.cursor()
+        cursor.execute(
+            """
+            SELECT task_id, description, status, agent_type, model, created_at, updated_at, activity_log
+            FROM tasks
+            WHERE status IN ('failed', 'stopped')
+            ORDER BY updated_at DESC
+        """
+        )
 
         failed = []
-        for task in task_manager.tasks.values():
-            if task.status in ["failed", "stopped"]:
-                latest_activity = None
-                if task.activity_log and len(task.activity_log) > 0:
-                    latest_activity = task.activity_log[-1]["message"]
+        for row in cursor.fetchall():
+            task_id, description, status, agent_type, model, created_at, updated_at, activity_log_json = row
+            activity_log = json.loads(activity_log_json) if activity_log_json else []
 
-                failed.append(
-                    {
-                        "task_id": task.task_id,
-                        "description": task.description,
-                        "status": task.status,
-                        "worker_type": task.worker_type,
-                        "model": task.model,
-                        "created_at": task.created_at,
-                        "updated_at": task.updated_at,
-                        "latest_activity": latest_activity,
-                    }
-                )
+            latest_activity = None
+            if activity_log and len(activity_log) > 0:
+                latest_activity = activity_log[-1]["message"]
 
-        # Sort by updated_at (most recent first)
-        failed.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+            failed.append(
+                {
+                    "task_id": task_id,
+                    "description": description,
+                    "status": status,
+                    "worker_type": agent_type,
+                    "model": model,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "latest_activity": latest_activity,
+                }
+            )
 
         # Apply pagination
         total = len(failed)
@@ -535,29 +571,37 @@ def all_tasks():
         page = int(request.args.get("page", 1))
         page_size = int(request.args.get("page_size", 20))
 
-        task_manager.reload_tasks()
+        # Get all tasks from database
+        cursor = task_manager.db.conn.cursor()
+        cursor.execute(
+            """
+            SELECT task_id, description, status, agent_type, model, created_at, updated_at, activity_log
+            FROM tasks
+            ORDER BY updated_at DESC
+        """
+        )
 
         all_tasks_list = []
-        for task in task_manager.tasks.values():
+        for row in cursor.fetchall():
+            task_id, description, status, agent_type, model, created_at, updated_at, activity_log_json = row
+            activity_log = json.loads(activity_log_json) if activity_log_json else []
+
             latest_activity = None
-            if task.activity_log and len(task.activity_log) > 0:
-                latest_activity = task.activity_log[-1]["message"]
+            if activity_log and len(activity_log) > 0:
+                latest_activity = activity_log[-1]["message"]
 
             all_tasks_list.append(
                 {
-                    "task_id": task.task_id,
-                    "description": task.description,
-                    "status": task.status,
-                    "worker_type": task.worker_type,
-                    "model": task.model,
-                    "created_at": task.created_at,
-                    "updated_at": task.updated_at,
+                    "task_id": task_id,
+                    "description": description,
+                    "status": status,
+                    "worker_type": agent_type,
+                    "model": model,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
                     "latest_activity": latest_activity,
                 }
             )
-
-        # Sort by updated_at (most recent first)
-        all_tasks_list.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
 
         # Apply pagination
         total = len(all_tasks_list)
@@ -576,15 +620,13 @@ def all_tasks():
 def task_detail(task_id: str):
     """Get detailed information about a specific task"""
     try:
-        # Reload tasks to get latest state
-        task_manager.reload_tasks()
+        # Get task from database
+        task_dict = task_manager.db.get_task(task_id)
 
-        task = task_manager.tasks.get(task_id)
-
-        if not task:
+        if not task_dict:
             return jsonify({"error": "Task not found"}), 404
 
-        return jsonify(task.to_dict())
+        return jsonify(task_dict)
 
     except Exception as e:
         logger.error(f"Error getting task detail: {e}")
@@ -629,19 +671,30 @@ def generate_sse_updates(hours: int = 24) -> Generator[str, None, None]:
             }
             activity = []
 
-            # Get recent task activity
+            # Get recent task activity from database
             limit = 20
-            all_tasks = list(task_manager.tasks.values())
-            all_tasks.sort(key=lambda t: t.updated_at, reverse=True)
+            cursor = task_manager.db.conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_id, description, status, activity_log
+                FROM tasks
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """,
+                (limit,),
+            )
 
-            for task in all_tasks[:limit]:
-                if task.activity_log:
-                    for activity_entry in reversed(task.activity_log[-10:]):
+            for row in cursor.fetchall():
+                task_id, description, status, activity_log_json = row
+                activity_log = json.loads(activity_log_json) if activity_log_json else []
+
+                if activity_log:
+                    for activity_entry in reversed(activity_log[-10:]):
                         activity.append(
                             {
-                                "task_id": task.task_id,
-                                "description": task.description[:50],
-                                "status": task.status,
+                                "task_id": task_id,
+                                "description": description[:50],
+                                "status": status,
                                 "timestamp": activity_entry["timestamp"],
                                 "message": activity_entry["message"],
                                 "output_lines": activity_entry.get("output_lines"),
