@@ -8,43 +8,6 @@
 
 **Core Philosophy**: Right model for the right task. Fast & cheap for questions, powerful & thorough for code.
 
-## Architecture Patterns
-
-### Agent-Based System
-
-We use a **multi-agent orchestrator pattern**:
-
-```
-orchestrator (Task tool only)
-  ├─→ code_agent (backend, file ops, git)
-  ├─→ frontend_agent (UI/UX, Chrome DevTools)
-  └─→ research_agent (analysis, proposals, no implementation)
-```
-
-**Key Principle**: Orchestrator NEVER executes - it only delegates to specialized agents.
-
-### Message Flow
-
-```
-Telegram → Router → Claude API (questions) | Background Task (coding)
-                         ↓                           ↓
-                    Direct answer              Orchestrator
-                                                    ↓
-                                          Spawns specialized agents
-                                                    ↓
-                                          Aggregates & returns result
-```
-
-### Background Task Pattern
-
-Long-running work uses **AgentPool** (bounded worker pool):
-- 3 concurrent workers max
-- Queue-based task distribution
-- Non-blocking submission
-- Graceful shutdown via poison pill
-
-**When to use**: Tasks >30 seconds, file operations, git operations, testing
-
 ## Repository Conventions
 
 ### Python Style
@@ -333,68 +296,6 @@ BACKGROUND_TASK|Fix bug|Fixing the bug
 **Problem**: Telegram rate limits are PER USER (30/min, 500/hour), not global.
 
 **Solution**: `message_queue.py` handles per-user serialization. Don't add global limits.
-
-## Agent-Specific Guidelines
-
-### Orchestrator (`orchestrator`)
-
-**Role**: Project manager - delegates, never executes
-
-**Tools**: Task only
-
-**Key decision**: Which agent(s)? What order? Parallel or sequential?
-
-**Workflow patterns**:
-- Research → Implement (analysis before coding)
-- Backend → Frontend (API then UI)
-- Parallel execution (independent tasks)
-
-**Output**: Aggregated summary for user
-
-### Code Agent (`code_agent`)
-
-**Role**: Backend coding, file ops, git
-
-**Tools**: Read, Write, Edit, Glob, Grep, Bash
-
-**Must do**:
-- Read files before editing
-- Commit after changes
-- Test when applicable
-- Return concise summary
-
-**Self-awareness**: When modifying bot's own code, note that bot restart needed.
-
-### Frontend Agent (`frontend_agent`)
-
-**Role**: Web UI/UX with visual validation
-
-**Tools**: Read, Write, Edit, Glob, Grep, Bash, Chrome DevTools MCP
-
-**Workflow**:
-1. Navigate reference URL (if provided)
-2. Screenshot + snapshot
-3. Extract design tokens (fonts, colors, spacing)
-4. Implement incrementally
-5. Screenshot comparison
-6. Iterate
-
-**Chrome DevTools**: Use extensively for visual validation.
-
-### Research Agent (`research_agent`)
-
-**Role**: Analysis and proposals (NO implementation)
-
-**Tools**: Read, Glob, Grep (read-only)
-
-**Output**: Markdown proposal with:
-- Current state analysis
-- Proposed changes with code examples
-- Implementation plan
-- Effort estimates
-- Risks & benefits
-
-**Next step**: Orchestrator displays to user → user approves → code_agent implements
 
 ## Testing
 
