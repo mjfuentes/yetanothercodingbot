@@ -891,6 +891,11 @@
                 <button class="btn" id="showArchiveDocs" onclick="filterDocs('archive')">Archive</button>
             </div>
             <div id="docsList"></div>
+            <div class="pagination" id="docsPagination" style="display: none;">
+                <button class="pagination-btn" onclick="changeDocsPage(-1)">← Previous</button>
+                <span class="pagination-info" id="docsPaginationInfo">Page 1 of 1</span>
+                <button class="pagination-btn" onclick="changeDocsPage(1)">Next →</button>
+            </div>
         </div>
     </div>
 
@@ -972,6 +977,8 @@
         let preventAutoRefetch = false; // Prevent SSE from refetching tasks
         let allDocs = [];
         let currentDocsFilter = 'active';
+        let docsPage = 1;
+        let docsPageSize = 5;
 
         document.addEventListener('DOMContentLoaded', () => {
             // Force dark theme
@@ -1614,6 +1621,7 @@
 
         function filterDocs(filter) {
             currentDocsFilter = filter;
+            docsPage = 1; // Reset to first page
 
             // Update button states
             document.getElementById('showAllDocs').classList.toggle('active', filter === 'all');
@@ -1623,11 +1631,20 @@
             renderDocsList();
         }
 
+        function changeDocsPage(delta) {
+            const newPage = docsPage + delta;
+            if (newPage >= 1) {
+                docsPage = newPage;
+                renderDocsList();
+            }
+        }
+
         function renderDocsList() {
             const list = document.getElementById('docsList');
 
             if (!allDocs || allDocs.length === 0) {
                 list.innerHTML = '<div class="no-data">No documentation files found</div>';
+                document.getElementById('docsPagination').style.display = 'none';
                 return;
             }
 
@@ -1639,12 +1656,37 @@
                 filteredDocs = allDocs.filter(doc => doc.is_archive);
             }
 
+            // Sort by modification date (latest first)
+            filteredDocs.sort((a, b) => b.modified - a.modified);
+
             if (filteredDocs.length === 0) {
                 list.innerHTML = `<div class="no-data">No ${currentDocsFilter} documentation files</div>`;
+                document.getElementById('docsPagination').style.display = 'none';
                 return;
             }
 
-            list.innerHTML = '<div class="tool-list">' + filteredDocs.map(doc => {
+            // Pagination
+            const totalDocs = filteredDocs.length;
+            const totalDocsPages = Math.ceil(totalDocs / docsPageSize);
+            const startIdx = (docsPage - 1) * docsPageSize;
+            const endIdx = Math.min(startIdx + docsPageSize, totalDocs);
+            const paginatedDocs = filteredDocs.slice(startIdx, endIdx);
+
+            // Update pagination controls
+            const paginationDiv = document.getElementById('docsPagination');
+            const paginationInfo = document.getElementById('docsPaginationInfo');
+            const buttons = paginationDiv.querySelectorAll('.pagination-btn');
+
+            if (totalDocsPages > 1) {
+                paginationDiv.style.display = 'flex';
+                paginationInfo.textContent = `Page ${docsPage} of ${totalDocsPages} (${totalDocs} docs)`;
+                buttons[0].disabled = docsPage === 1;
+                buttons[1].disabled = docsPage === totalDocsPages;
+            } else {
+                paginationDiv.style.display = 'none';
+            }
+
+            list.innerHTML = '<div class="tool-list">' + paginatedDocs.map(doc => {
                 const sizeKB = (doc.size / 1024).toFixed(1);
                 const modified = new Date(doc.modified * 1000).toLocaleString();
 
