@@ -207,6 +207,12 @@ class ClaudeInteractiveSession:
                 self.usage_tracker.record_status_change(task_id, "started", "Starting Claude interactive session")
 
             # Start Claude in interactive mode with auto-approval for background tasks
+            # Generate deterministic UUID from task_id for session tracking
+            import uuid
+
+            # Create UUID5 from task_id (deterministic, valid UUID format)
+            task_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"agentlab.task.{task_id}"))
+
             cmd = [
                 "claude",
                 "chat",
@@ -214,6 +220,8 @@ class ClaudeInteractiveSession:
                 self.model,
                 "--permission-mode",
                 "bypassPermissions",  # Auto-approve file operations
+                "--session-id",
+                task_uuid,  # Use deterministic UUID based on task_id
             ]
 
             # Add agent flag if specified

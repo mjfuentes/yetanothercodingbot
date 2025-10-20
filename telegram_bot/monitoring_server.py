@@ -116,10 +116,14 @@ def task_tool_usage(task_id):
     """Get tool usage for a specific task from session logs"""
     try:
         import json
+        import uuid
         from collections import defaultdict
 
-        # Session logs are stored in logs/sessions/{task_id}/
-        session_dir = Path(sessions_dir) / task_id
+        # Convert task_id to UUID (same deterministic conversion as in claude_interactive.py)
+        task_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"agentlab.task.{task_id}"))
+
+        # Session logs are stored in logs/sessions/{task_uuid}/
+        session_dir = Path(sessions_dir) / task_uuid
         summary_file = session_dir / "summary.json"
         pre_tool_file = session_dir / "pre_tool_use.jsonl"
         post_tool_file = session_dir / "post_tool_use.jsonl"
