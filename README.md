@@ -4,6 +4,8 @@
   <img src="telegram_bot/logo.png" alt="Bot Logo" width="500"/>
 </p>
 
+> **Status: archived, October 2025.** Telegram front end for Claude: quick questions go to the API, coding tasks run in Claude Code CLI in the background, with a cost dashboard. Superseded by [AMIGA](https://github.com/mjfuentes/amiga) and then [cc+](https://github.com/kerplunkstudio/ccplus).
+
 A Telegram bot powered by Claude AI that handles everything from quick questions to complex coding tasks. Routes intelligently between Claude API for speed and Claude Code CLI for deep work.
 
 ## What it does
